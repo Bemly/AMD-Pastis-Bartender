@@ -1,0 +1,357 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		300000000000000000000001 /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* main.m */; };
+		300000000000000000000002 /* AppDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* AppDelegate.m */; };
+		300000000000000000000003 /* MainWindowController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* MainWindowController.m */; };
+		300000000000000000000004 /* AMDConfig.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000007 /* AMDConfig.m */; };
+		300000000000000000000005 /* TaskRunner.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000009 /* TaskRunner.m */; };
+		300000000000000000000006 /* AMDSearch.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000B /* AMDSearch.m */; };
+		300000000000000000000007 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000D /* Cocoa.framework */; };
+		300000000000000000000008 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000000000000000000010 /* QuartzCore.framework */; };
+		300000000000000000000009 /* OBKit.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000013 /* OBKit.m */; };
+		30000000000000000000000A /* OBLink.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000015 /* OBLink.m */; };
+		30000000000000000000000B /* OBHttp.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000017 /* OBHttp.m */; };
+		30000000000000000000000C /* OBPlaylist.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000019 /* OBPlaylist.m */; };
+		30000000000000000000000D /* OBMP4.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001B /* OBMP4.m */; };
+		30000000000000000000000E /* OBScript.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001D /* OBScript.m */; };
+		30000000000000000000000F /* OBADB.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001F /* OBADB.m */; };
+		300000000000000000000010 /* OBDL.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* OBDL.m */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		200000000000000000000001 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
+		200000000000000000000002 /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
+		200000000000000000000003 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
+		200000000000000000000004 /* MainWindowController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MainWindowController.h; sourceTree = "<group>"; };
+		200000000000000000000005 /* MainWindowController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = MainWindowController.m; sourceTree = "<group>"; };
+		200000000000000000000006 /* AMDConfig.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AMDConfig.h; sourceTree = "<group>"; };
+		200000000000000000000007 /* AMDConfig.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AMDConfig.m; sourceTree = "<group>"; };
+		200000000000000000000008 /* TaskRunner.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TaskRunner.h; sourceTree = "<group>"; };
+		200000000000000000000009 /* TaskRunner.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TaskRunner.m; sourceTree = "<group>"; };
+		20000000000000000000000A /* AMDSearch.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AMDSearch.h; sourceTree = "<group>"; };
+		20000000000000000000000B /* AMDSearch.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AMDSearch.m; sourceTree = "<group>"; };
+		20000000000000000000000F /* OBStrings.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBStrings.h; sourceTree = "<group>"; };
+		200000000000000000000011 /* AMDDebug.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AMDDebug.h; sourceTree = "<group>"; };
+		200000000000000000000012 /* OBKit.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBKit.h; sourceTree = "<group>"; };
+		200000000000000000000013 /* OBKit.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBKit.m; sourceTree = "<group>"; };
+		200000000000000000000014 /* OBLink.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBLink.h; sourceTree = "<group>"; };
+		200000000000000000000015 /* OBLink.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBLink.m; sourceTree = "<group>"; };
+		20000000000000000000000C /* App.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = App.plist; sourceTree = "<group>"; };
+		20000000000000000000000D /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
+		200000000000000000000010 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		20000000000000000000000E /* AMD-Pastis-Bartender.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AMD-Pastis-Bartender.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000016 /* OBHttp.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBHttp.h; sourceTree = "<group>"; };
+		200000000000000000000017 /* OBHttp.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBHttp.m; sourceTree = "<group>"; };
+		200000000000000000000018 /* OBPlaylist.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBPlaylist.h; sourceTree = "<group>"; };
+		200000000000000000000019 /* OBPlaylist.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBPlaylist.m; sourceTree = "<group>"; };
+		20000000000000000000001A /* OBMP4.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBMP4.h; sourceTree = "<group>"; };
+		20000000000000000000001B /* OBMP4.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBMP4.m; sourceTree = "<group>"; };
+		20000000000000000000001C /* OBScript.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBScript.h; sourceTree = "<group>"; };
+		20000000000000000000001D /* OBScript.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBScript.m; sourceTree = "<group>"; };
+		20000000000000000000001E /* OBADB.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBADB.h; sourceTree = "<group>"; };
+		20000000000000000000001F /* OBADB.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBADB.m; sourceTree = "<group>"; };
+		200000000000000000000020 /* OBDL.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBDL.h; sourceTree = "<group>"; };
+		200000000000000000000021 /* OBDL.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBDL.m; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		400000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000007 /* Cocoa.framework in Frameworks */,
+				300000000000000000000008 /* QuartzCore.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		100000000000000000000002 /* Project object */ = {
+			isa = PBXGroup;
+			children = (
+				100000000000000000000004 /* AMD-Pastis-Bartender */,
+				100000000000000000000005 /* Frameworks */,
+				100000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		100000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				20000000000000000000000E /* AMD-Pastis-Bartender.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		100000000000000000000004 /* AMD-Pastis-Bartender */ = {
+			isa = PBXGroup;
+			children = (
+				200000000000000000000001 /* main.m */,
+				200000000000000000000002 /* AppDelegate.h */,
+				200000000000000000000003 /* AppDelegate.m */,
+				200000000000000000000004 /* MainWindowController.h */,
+				200000000000000000000005 /* MainWindowController.m */,
+				200000000000000000000006 /* AMDConfig.h */,
+				200000000000000000000007 /* AMDConfig.m */,
+				200000000000000000000008 /* TaskRunner.h */,
+				200000000000000000000009 /* TaskRunner.m */,
+				20000000000000000000000A /* AMDSearch.h */,
+				20000000000000000000000B /* AMDSearch.m */,
+				20000000000000000000000F /* OBStrings.h */,
+				200000000000000000000011 /* AMDDebug.h */,
+				200000000000000000000012 /* OBKit.h */,
+				200000000000000000000013 /* OBKit.m */,
+				200000000000000000000014 /* OBLink.h */,
+				200000000000000000000015 /* OBLink.m */,
+				20000000000000000000000C /* App.plist */,
+				200000000000000000000016 /* OBHttp.h */,
+				200000000000000000000017 /* OBHttp.m */,
+				200000000000000000000018 /* OBPlaylist.h */,
+				200000000000000000000019 /* OBPlaylist.m */,
+				20000000000000000000001A /* OBMP4.h */,
+				20000000000000000000001B /* OBMP4.m */,
+				20000000000000000000001C /* OBScript.h */,
+				20000000000000000000001D /* OBScript.m */,
+				20000000000000000000001E /* OBADB.h */,
+				20000000000000000000001F /* OBADB.m */,
+				200000000000000000000020 /* OBDL.h */,
+				200000000000000000000021 /* OBDL.m */,
+			);
+			path = AMD-Pastis-Bartender;
+			sourceTree = "<group>";
+		};
+		100000000000000000000005 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				20000000000000000000000D /* Cocoa.framework */,
+				200000000000000000000010 /* QuartzCore.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		400000000000000000000001 /* AMD-Pastis-Bartender */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 500000000000000000000001 /* Build configuration list for PBXNativeTarget "AMD-Pastis-Bartender" */;
+			buildPhases = (
+				400000000000000000000003 /* Frameworks */,
+				400000000000000000000002 /* Sources */,
+				400000000000000000000004 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = AMD-Pastis-Bartender;
+			productName = AMD-Pastis-Bartender;
+			productReference = 20000000000000000000000E /* AMD-Pastis-Bartender.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		100000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					400000000000000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 500000000000000000000002 /* Build configuration list for PBXProject "AMD-Pastis-Bartender" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = 100000000000000000000002 /* Project object */;
+			productRefGroup = 100000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				400000000000000000000001 /* AMD-Pastis-Bartender */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		400000000000000000000004 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		400000000000000000000002 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				300000000000000000000001 /* main.m in Sources */,
+				300000000000000000000002 /* AppDelegate.m in Sources */,
+				300000000000000000000003 /* MainWindowController.m in Sources */,
+				300000000000000000000004 /* AMDConfig.m in Sources */,
+				300000000000000000000005 /* TaskRunner.m in Sources */,
+				300000000000000000000006 /* AMDSearch.m in Sources */,
+				300000000000000000000009 /* OBKit.m in Sources */,
+				30000000000000000000000A /* OBLink.m in Sources */,
+				30000000000000000000000B /* OBHttp.m in Sources */,
+				30000000000000000000000C /* OBPlaylist.m in Sources */,
+				30000000000000000000000D /* OBMP4.m in Sources */,
+				30000000000000000000000E /* OBScript.m in Sources */,
+				30000000000000000000000F /* OBADB.m in Sources */,
+				300000000000000000000010 /* OBDL.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		600000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		600000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_OPTIMIZATION_LEVEL = s;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		600000000000000000000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(HOME)/.obkit/16.7.19",
+					"$(SRCROOT)/Vendor/mac-dual-pipe/src",
+				);
+				INFOPLIST_FILE = AMD-Pastis-Bartender/App.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = (
+					"-Wl,-force_load,$(HOME)/.obkit/16.7.19/libobcore.a",
+					"$(SRCROOT)/Vendor/mac-dual-pipe/build/Release/libmac-dual-pipe.a",
+					"-Wl,-export_dynamic",
+					"-lbsm",
+					"-ldl",
+					"-lresolv",
+					"-Wl,-framework,IOKit",
+					"-Wl,-framework,Security",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = bemly.amd-pastis-bartender;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		600000000000000000000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(HOME)/.obkit/16.7.19",
+					"$(SRCROOT)/Vendor/mac-dual-pipe/src",
+				);
+				INFOPLIST_FILE = AMD-Pastis-Bartender/App.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				OTHER_LDFLAGS = (
+					"-Wl,-force_load,$(HOME)/.obkit/16.7.19/libobcore.a",
+					"$(SRCROOT)/Vendor/mac-dual-pipe/build/Release/libmac-dual-pipe.a",
+					"-Wl,-export_dynamic",
+					"-lbsm",
+					"-ldl",
+					"-lresolv",
+					"-Wl,-framework,IOKit",
+					"-Wl,-framework,Security",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = bemly.amd-pastis-bartender;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		500000000000000000000001 /* Build configuration list for PBXNativeTarget "AMD-Pastis-Bartender" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				600000000000000000000003 /* Debug */,
+				600000000000000000000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		500000000000000000000002 /* Build configuration list for PBXProject "AMD-Pastis-Bartender" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				600000000000000000000001 /* Debug */,
+				600000000000000000000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 100000000000000000000001 /* Project object */;
+}

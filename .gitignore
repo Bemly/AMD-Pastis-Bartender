@@ -1,0 +1,12 @@
+# 构建产物
+build/
+
+# macOS
+.DS_Store
+
+# Xcode 用户态文件
+xcuserdata/
+*.xcuserstate
+
+# 本地 AI 协作文档,不入库
+AGENTS.md

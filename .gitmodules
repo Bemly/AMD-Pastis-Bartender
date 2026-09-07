@@ -1,0 +1,3 @@
+[submodule "Vendor/mac-dual-pipe"]
+	path = Vendor/mac-dual-pipe
+	url = https://github.com/Bemly/mac-dual-pipe.git
