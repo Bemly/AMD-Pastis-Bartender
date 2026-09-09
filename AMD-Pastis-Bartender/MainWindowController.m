@@ -200,7 +200,28 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 }
 
 - (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
-    if (tv != _sideTable) return nil;   // 结果表走 cell-based(objectValueForTableColumn)
+    if (tv != _sideTable) {
+        // 结果表同样 view-based:必须给 view,只靠 objectValue 行是空的(剩选中高亮)
+        if (tv != _table || row < 0 || row >= (NSInteger)_results.count) return nil;
+        NSString *ident = col.identifier;
+        NSTextField *tf = (NSTextField *)[tv makeViewWithIdentifier:ident owner:self];
+        if (!tf) {
+            tf = [NSTextField labelWithString:@""];
+            tf.identifier = ident;
+            tf.font = [NSFont systemFontOfSize:13];
+            tf.textColor = [NSColor labelColor];
+            tf.lineBreakMode = NSLineBreakByTruncatingTail;
+            tf.maximumNumberOfLines = 1;
+        }
+        NSDictionary *r = _results[row];
+        if ([ident isEqualToString:@"ID"]) tf.stringValue = [r[@"trackId"] stringValue] ?: @"";
+        else if ([ident isEqualToString:@"曲名"]) tf.stringValue = r[@"track"] ?: @"";
+        else if ([ident isEqualToString:@"艺人"]) tf.stringValue = r[@"artist"] ?: @"";
+        else if ([ident isEqualToString:@"专辑"]) tf.stringValue = r[@"album"] ?: @"";
+        else if ([ident isEqualToString:@"区"]) tf.stringValue = r[@"src"] ?: @"";
+        else tf.stringValue = @"";
+        return tf;
+    }
     NSDictionary *item = self.sideItems[row];
     NSTableCellView *cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
     NSImageView *iv = [[NSImageView alloc] initWithFrame:NSZeroRect];
@@ -655,6 +676,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 
     _table = [[NSTableView alloc] initWithFrame:NSMakeRect(0, 0, 800, 140)];
     _table.autoresizingMask = NSViewWidthSizable;
+    _table.rowHeight = 22;   // 13pt 结果字不被裁
     _searchHintL = [NSTextField labelWithString:@""];
     NSArray *cols = @[@[@"ID", @90], @[@"曲名", @180], @[@"艺人", @160], @[@"专辑", @130], @[@"区", @36]];
     for (NSArray *c in cols) {
