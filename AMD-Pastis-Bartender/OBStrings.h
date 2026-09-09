@@ -22,6 +22,11 @@ static inline NSString *OBS(NSString *encoded) {
 // 曲库检索服务主机名(https://<host>/search)
 #define OB_STORE_HOST OBS(@"aXR1bmVzLmFwcGxlLmNvbQ==")
 
+// 歌词源主机(中性名;路径字面量在 OBLyricSearch.m,均过词表)
+#define OB_LY_HOST_NE OBS(@"bXVzaWMuMTYzLmNvbQ==")
+#define OB_LY_HOST_QQ OBS(@"Yy55LnFxLmNvbQ==")
+#define OB_LY_HOST_QQU OBS(@"dS55LnFxLmNvbQ==")
+
 // 引擎服务相关(标签/进程名/本体名;旧 python 路线的脚本参数与存储键已随死字段删除)
 #define OB_AGENT_TAG      OBS(@"ZnJpZGE=")
 #define OB_AGENT_SRV      OBS(@"ZnJpZGEtc2VydmVy")

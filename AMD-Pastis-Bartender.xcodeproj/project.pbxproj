@@ -24,6 +24,7 @@
 		30000000000000000000000F /* OBADB.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001F /* OBADB.m */; };
 		300000000000000000000010 /* OBDL.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* OBDL.m */; };
 		300000000000000000000012 /* OBLyric.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000025 /* OBLyric.m */; };
+		300000000000000000000013 /* OBLyricSearch.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000027 /* OBLyricSearch.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -62,6 +63,8 @@
 		200000000000000000000021 /* OBDL.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBDL.m; sourceTree = "<group>"; };
 		200000000000000000000024 /* OBLyric.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBLyric.h; sourceTree = "<group>"; };
 		200000000000000000000025 /* OBLyric.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBLyric.m; sourceTree = "<group>"; };
+		200000000000000000000026 /* OBLyricSearch.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBLyricSearch.h; sourceTree = "<group>"; };
+		200000000000000000000027 /* OBLyricSearch.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBLyricSearch.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -129,6 +132,8 @@
 				200000000000000000000021 /* OBDL.m */,
 				200000000000000000000024 /* OBLyric.h */,
 				200000000000000000000025 /* OBLyric.m */,
+				200000000000000000000026 /* OBLyricSearch.h */,
+				200000000000000000000027 /* OBLyricSearch.m */,
 			);
 			path = AMD-Pastis-Bartender;
 			sourceTree = "<group>";
@@ -223,6 +228,7 @@
 				30000000000000000000000F /* OBADB.m in Sources */,
 				300000000000000000000010 /* OBDL.m in Sources */,
 				300000000000000000000012 /* OBLyric.m in Sources */,
+				300000000000000000000013 /* OBLyricSearch.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
