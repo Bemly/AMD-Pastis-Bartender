@@ -1438,10 +1438,11 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
             NSString *full = [dir stringByAppendingPathComponent:fn];
             NSString *base = [fn stringByDeletingPathExtension];
             NSString *artist = nil, *title = nil;
-            // 同名 .json 有则读 artist/title(下载与跟随收割都会写)
+            // 同名 .json 有则读 artist/title(下载与跟随收割都会写);文件不存在时 data 为 nil,
+            // 直接调 JSONObjectWithData 会抛异常(不走 error),必须先判空
             NSString *jp = [[full stringByDeletingPathExtension] stringByAppendingPathExtension:@"json"];
-            NSDictionary *j = [NSJSONSerialization JSONObjectWithData:
-                               [[NSData alloc] initWithContentsOfFile:jp] options:0 error:NULL];
+            NSData *jd = [[NSData alloc] initWithContentsOfFile:jp];
+            NSDictionary *j = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:NULL] : nil;
             if ([j isKindOfClass:[NSDictionary class]]) {
                 if ([j[@"artist"] length]) artist = j[@"artist"];
                 if ([j[@"title"] length]) title = j[@"title"];

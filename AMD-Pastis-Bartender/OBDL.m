@@ -1141,8 +1141,10 @@ static const NSUInteger kTcpBatchCap = 8000000;
 
 // sidecar 是否记录了一次绿色验证(断点续传依据;.m4a 被移走只剩 sidecar 也算已收)
 + (BOOL)sidecarGreen:(NSString *)path {
-    NSDictionary *j = [NSJSONSerialization JSONObjectWithData:[[NSData alloc] initWithContentsOfFile:path]
-                                                      options:0 error:NULL];
+    // 文件不存在时 data 为 nil,直接调 JSONObjectWithData 会抛异常,必须先判空
+    NSData *dd = [[NSData alloc] initWithContentsOfFile:path];
+    if (!dd) return NO;
+    NSDictionary *j = [NSJSONSerialization JSONObjectWithData:dd options:0 error:NULL];
     if (!j || [j[@"error"] length] || [j[@"skipped"] length]) return NO;
     NSDictionary *v = j[@"verify"];
     if (![v isKindOfClass:[NSDictionary class]]) return NO;
