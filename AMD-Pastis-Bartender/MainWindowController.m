@@ -47,7 +47,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     NSMutableDictionary<NSNumber *, NSView *> *_pages;
     NSInteger _section;
     // 连接页
-    NSTextField *_adbPathF, *_adbHostF, *_adbPortF, *_serialF, *_attachF;
+    NSTextField *_adbPathF, *_adbHostF, *_adbPortF, *_serialF;
     NSTextField *_tcpPortF, *_lanIpF, *_scriptDirF, *_outDirF;
     NSButton *_useTcpC;
     NSTextField *_statusL;
@@ -560,13 +560,8 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         [self addCard:[self glassCard:@"ADB 连接" body:v] toPage:page];
     }
     {
-        // 卡 2:解密通道
+        // 卡 2:解密通道(原生行为固定等价 auto:USB 优先,失败退回环 27042)
         NSStackView *v = [self formStack];
-        _attachF = [self field:@"auto" width:160];
-        [v addViews:@[
-            [self formRow:@"注入引擎" items:@[_attachF]],
-            [self hint:@"auto = USB 优先,失败退 127.0.0.1:27042;也可手填 host:port。"],
-        ]];
         _useTcpC = [NSButton checkboxWithTitle:@"使用 TCP 双链传输" target:nil action:nil];
         [v addArrangedSubview:_useTcpC];
         [v addViews:@[
@@ -763,7 +758,6 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     _adbHostF.stringValue = c.adbHost ?: @"";
     _adbPortF.stringValue = c.adbPort ?: @"";
     _serialF.stringValue = c.serial ?: @"";
-    _attachF.stringValue = c.attach ?: @"auto";
     _tcpPortF.stringValue = c.tcpPort ?: @"17001";
     _lanIpF.stringValue = c.lanIp ?: @"";
     _scriptDirF.stringValue = c.scriptDir ?: @"";
@@ -778,8 +772,6 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     c.adbHost = [_adbHostF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     c.adbPort = [_adbPortF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     c.serial = [_serialF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    c.attach = [_attachF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (c.attach.length == 0) c.attach = @"auto";
     c.tcpPort = [_tcpPortF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (c.tcpPort.length == 0) c.tcpPort = @"17001";
     c.lanIp = [_lanIpF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -1031,24 +1023,6 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     });
 }
 
-- (NSArray<NSString *> *)downloadBaseArgs:(NSString *)mode {
-    // mode: nil=普通下载, @"check"=自检, @"cache"=--from-cache
-    // 调用方保证已在主线程 readUIToConfig 过
-    AMDConfig *c = [AMDConfig shared];
-    NSMutableArray *a = [NSMutableArray array];
-    if (c.useTcp) [a addObject:@"--tcp"]; else [a addObject:@"--no-tcp"];
-    if (c.adbHost.length > 0) { [a addObject:@"--adb-host"]; [a addObject:c.adbHost]; }
-    if (c.adbPort.length > 0) { [a addObject:@"--adb-port"]; [a addObject:c.adbPort]; }
-    if (c.serial.length > 0) { [a addObject:@"-s"]; [a addObject:c.serial]; }
-    if (c.attach.length > 0) { [a addObject:OB_AGENT_FLAG]; [a addObject:c.attach]; }
-    if (c.tcpPort.length > 0) { [a addObject:@"--tcp-port"]; [a addObject:c.tcpPort]; }
-    if (c.lanIp.length > 0) { [a addObject:@"--lan-ip"]; [a addObject:c.lanIp]; }
-    if (c.outDir.length > 0) { [a addObject:@"--out"]; [a addObject:c.outDir]; }
-    if ([mode isEqualToString:@"check"]) [a addObject:@"--check"];
-    if ([mode isEqualToString:@"cache"]) [a addObject:@"--from-cache"];
-    return a;
-}
-
 // 下载入口的可用性:跑任务时禁用工具栏下载项 + 启用取消
 - (void)applyDownloadBusy:(BOOL)busy {
     _cancelBtn.enabled = busy;
@@ -1192,38 +1166,6 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 }
 
 #pragma mark - download
-
-- (void)runDownloadScriptWithArgs:(void(^)(NSMutableArray *a))fill {
-    AMDDBG(@"action: runDownloadScript");
-    [self readUIToConfig];
-    AMDConfig *c = [AMDConfig shared];
-    NSString *script = [c downloadScriptPath];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:script]) {
-        [self appendLog:[NSString stringWithFormat:@"[下载] 找不到脚本: %@ (检查「连接」页的脚本目录)\n", script]];
-        return;
-    }
-    NSString *py = [self resolvedToolPath:[c pythonPath]];
-    NSMutableArray *args = [NSMutableArray arrayWithObject:script];
-    if (fill) fill(args);
-    [self appendLog:[NSString stringWithFormat:@"[下载] %@ %@\n", py, [args componentsJoinedByString:@" "]]];
-    if (_dlTask && [_dlTask isRunning]) {
-        [self appendLog:@"[下载] 已有任务在跑,先取消\n"];
-        return;
-    }
-    TaskRunner *t = [[TaskRunner alloc] initWithLaunchPath:py arguments:args cwd:c.scriptDir env:nil];
-    _dlTask = t;
-    __weak typeof(self) weakSelf = self;
-    t.onOutput = ^(NSString *text) { [weakSelf appendLog:text]; };
-    t.onEnd = ^(int status) {
-        __strong typeof(weakSelf) strong = weakSelf;
-        if (!strong) return;
-        [strong applyDownloadBusy:NO];
-        [strong appendLog:[NSString stringWithFormat:@"[下载] 进程结束 exit=%d\n", status]];
-        if (status == 0) NSBeep();
-    };
-    [t launch];
-    [self applyDownloadBusy:YES];
-}
 
 - (void)startDownloadNative:(NSString *)adamIds cache:(BOOL)cacheMode {
     // 原生引擎:多目标逐个跑;取消标志为 ivar(地址稳定,引擎在碎片间轮询)

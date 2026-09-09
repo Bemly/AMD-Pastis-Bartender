@@ -7,7 +7,6 @@
 @property (copy) NSString *adbHost;    // adb server host,空=标准
 @property (copy) NSString *adbPort;    // adb server port,空=标准5037
 @property (copy) NSString *serial;     // 设备序列号,空=自动探测
-@property (copy) NSString *attach;     // auto | usb | host:port
 @property (copy) NSString *tcpPort;    // 起始端口对,默认17001
 @property (copy) NSString *lanIp;      // 手机局域网IP,空=自动探测
 @property (copy) NSString *scriptDir;  // download_tcp.py 所在目录

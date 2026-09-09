@@ -18,7 +18,6 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     self.adbHost = @"";
     self.adbPort = @"";
     self.serial = @"";
-    self.attach = @"auto";
     self.tcpPort = @"17001";
     self.lanIp = @"";
     self.scriptDir = @"/Users/bemly/Projects/amd";
@@ -36,7 +35,6 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
         self.adbHost = [d stringForKey:[kPfx stringByAppendingString:@"adbHost"]] ?: @"";
         self.adbPort = [d stringForKey:[kPfx stringByAppendingString:@"adbPort"]] ?: @"";
         self.serial = [d stringForKey:[kPfx stringByAppendingString:@"serial"]] ?: @"";
-        self.attach = [d stringForKey:[kPfx stringByAppendingString:OB_PREF_AGENT]] ?: @"auto";
         self.tcpPort = [d stringForKey:[kPfx stringByAppendingString:@"tcpPort"]] ?: @"17001";
         self.lanIp = [d stringForKey:[kPfx stringByAppendingString:@"lanIp"]] ?: @"";
         self.scriptDir = [d stringForKey:[kPfx stringByAppendingString:@"scriptDir"]] ?: self.scriptDir;
@@ -78,15 +76,14 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     [d setObject:self.adbHost forKey:[kPfx stringByAppendingString:@"adbHost"]];
     [d setObject:self.adbPort forKey:[kPfx stringByAppendingString:@"adbPort"]];
     [d setObject:self.serial forKey:[kPfx stringByAppendingString:@"serial"]];
-    [d setObject:self.attach forKey:[kPfx stringByAppendingString:OB_PREF_AGENT]];
     [d setObject:self.tcpPort forKey:[kPfx stringByAppendingString:@"tcpPort"]];
     [d setObject:self.lanIp forKey:[kPfx stringByAppendingString:@"lanIp"]];
     [d setObject:self.scriptDir forKey:[kPfx stringByAppendingString:@"scriptDir"]];
     [d setObject:self.outDir forKey:[kPfx stringByAppendingString:@"outDir"]];
     [d setBool:self.useTcp forKey:[kPfx stringByAppendingString:@"useTcp"]];
     [d synchronize];
-    AMDDBG(@"config: saved adb=%@ attach=%@ serial=%@ tcp=%@ useTcp=%d",
-           self.adbPath, self.attach, self.serial, self.tcpPort, self.useTcp);
+    AMDDBG(@"config: saved adb=%@ serial=%@ tcp=%@ useTcp=%d",
+           self.adbPath, self.serial, self.tcpPort, self.useTcp);
 }
 
 - (NSArray<NSString *> *)adbBaseArgs {

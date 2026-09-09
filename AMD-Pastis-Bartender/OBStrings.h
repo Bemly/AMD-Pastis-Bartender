@@ -22,12 +22,10 @@ static inline NSString *OBS(NSString *encoded) {
 // 曲库检索服务主机名(https://<host>/search)
 #define OB_STORE_HOST OBS(@"aXR1bmVzLmFwcGxlLmNvbQ==")
 
-// attach 引擎相关(标签/进程名/脚本参数/存储键)
+// 引擎服务相关(标签/进程名/本体名;旧 python 路线的脚本参数与存储键已随死字段删除)
 #define OB_AGENT_TAG      OBS(@"ZnJpZGE=")
 #define OB_AGENT_SRV      OBS(@"ZnJpZGEtc2VydmVy")
 #define OB_AGENT_SRV16    OBS(@"ZnJpZGEtc2VydmVyMTY=")
-#define OB_AGENT_FLAG     OBS(@"LS1mcmlkYQ==")
-#define OB_PREF_AGENT     OBS(@"ZnJpZGE=")
 
 // 引擎服务安装包直链(双架构取 arm64;版本锁 16.7.19 与手机端服务/套件三方一致)
 #define OB_KIT_URL        OBS(@"aHR0cHM6Ly9naXRodWIuY29tL2ZyaWRhL2ZyaWRhL3JlbGVhc2VzL2Rvd25sb2FkLzE2LjcuMTkvZnJpZGEtc2VydmVyLTE2LjcuMTktYW5kcm9pZC1hcm02NC54eg==")
