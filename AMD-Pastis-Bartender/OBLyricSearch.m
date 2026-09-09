@@ -12,8 +12,15 @@ static void Logf(void (^logf)(NSString *), NSString *fmt, ...) {
 }
 
 static NSString *EncQ(NSString *s) {
-    return [s stringByAddingPercentEncodingWithAllowedCharacters:
-            [NSCharacterSet URLQueryAllowedCharacterSet]] ?: @"";
+    // URLQueryAllowedCharacterSet 会放过 &(+/=?),文件名里常见,直接拼 URL 会被截断查询词
+    static NSCharacterSet *set;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSMutableCharacterSet *m = [[NSCharacterSet URLQueryAllowedCharacterSet] mutableCopy];
+        [m removeCharactersInString:@"&+=?"];
+        set = m;
+    });
+    return [s stringByAddingPercentEncodingWithAllowedCharacters:set] ?: @"";
 }
 
 static NSString *JoinNames(NSArray *arr, NSString *key) {
