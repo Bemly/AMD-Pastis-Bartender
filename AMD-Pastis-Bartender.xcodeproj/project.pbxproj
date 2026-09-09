@@ -23,6 +23,7 @@
 		30000000000000000000000E /* OBScript.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001D /* OBScript.m */; };
 		30000000000000000000000F /* OBADB.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000001F /* OBADB.m */; };
 		300000000000000000000010 /* OBDL.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* OBDL.m */; };
+		300000000000000000000012 /* OBLyric.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000025 /* OBLyric.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -59,6 +60,8 @@
 		20000000000000000000001F /* OBADB.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBADB.m; sourceTree = "<group>"; };
 		200000000000000000000020 /* OBDL.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBDL.h; sourceTree = "<group>"; };
 		200000000000000000000021 /* OBDL.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBDL.m; sourceTree = "<group>"; };
+		200000000000000000000024 /* OBLyric.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBLyric.h; sourceTree = "<group>"; };
+		200000000000000000000025 /* OBLyric.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBLyric.m; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,6 +127,8 @@
 				20000000000000000000001F /* OBADB.m */,
 				200000000000000000000020 /* OBDL.h */,
 				200000000000000000000021 /* OBDL.m */,
+				200000000000000000000024 /* OBLyric.h */,
+				200000000000000000000025 /* OBLyric.m */,
 			);
 			path = AMD-Pastis-Bartender;
 			sourceTree = "<group>";
@@ -217,6 +222,7 @@
 				30000000000000000000000E /* OBScript.m in Sources */,
 				30000000000000000000000F /* OBADB.m in Sources */,
 				300000000000000000000010 /* OBDL.m in Sources */,
+				300000000000000000000012 /* OBLyric.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
