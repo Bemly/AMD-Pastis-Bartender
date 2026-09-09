@@ -6,6 +6,9 @@
 #import "AMDDebug.h"
 #import "OBLink.h"
 #import "OBDL.h"
+#import "OBLyric.h"
+#import "OBLyricSearch.h"
+#import "OBMP4.h"
 #import <QuartzCore/QuartzCore.h>
 
 static NSArray<NSString *> *AllCountries(void) {
@@ -67,6 +70,20 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     volatile BOOL _dlCancel;
     volatile BOOL _followCancel;
     BOOL _followOn;
+    // 预览页(输出目录 .m4a 列表;同名 .json 有则读 artist/title)
+    NSTableView *_pvTable;
+    NSMutableArray<NSDictionary *> *_pvItems;
+    NSTextField *_pvHintL;
+    // 歌词页(单曲模式:搜索→选行→保存/互转)
+    NSTextField *_lyKeyF, *_lyFileF;
+    NSButton *_lyNEBtn, *_lyQQBtn;
+    NSTableView *_lyTable;
+    NSMutableArray<NSDictionary *> *_lyResults;
+    NSTextField *_lyHintL;
+    NSPopUpButton *_lyModeP, *_lyEncP, *_lyLayoutP;
+    NSTextField *_lySepF;
+    NSTextField *_lyConvSrcF;
+    NSPopUpButton *_lyConvP;
     // 日志
     NSTextView *_logV;
 }
@@ -78,6 +95,8 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     if ((self = [super initWithWindow:nil])) {
         _pages = [NSMutableDictionary dictionary];
         _results = [NSMutableArray array];
+        _pvItems = [NSMutableArray array];
+        _lyResults = [NSMutableArray array];
         _section = -1;
         NSWindow *w = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 920, 620)
                                                   styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
@@ -102,12 +121,14 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 }
 
 - (NSArray<NSDictionary *> *)sideItems {
-    // 顺序 = 使用流程:配环境 → 连手机 → 找歌 → 下载 → 看结果
+    // 顺序 = 使用流程:配环境 → 连手机 → 找歌 → 下载 → 预览成品 → 配歌词 → 看结果
     return @[
         SideItem(@"连接", @"slider.horizontal.3"),
         SideItem(@"设备", @"desktopcomputer"),
         SideItem(@"搜索", @"magnifyingglass"),
         SideItem(@"下载", @"arrow.down.circle"),
+        SideItem(@"预览", @"list.bullet"),
+        SideItem(@"歌词", @"text.quote"),
         SideItem(@"日志", @"doc.text"),
     ];
 }
@@ -196,30 +217,50 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 #pragma mark - 侧栏数据源
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tv {
-    return (tv == _sideTable) ? (NSInteger)self.sideItems.count : (NSInteger)_results.count;
+    if (tv == _sideTable) return (NSInteger)self.sideItems.count;
+    if (tv == _pvTable) return (NSInteger)_pvItems.count;
+    if (tv == _lyTable) return (NSInteger)_lyResults.count;
+    return (NSInteger)_results.count;
+}
+
+// 三个内容表(搜索/预览/歌词)的 cell 取值;越界返回 nil(调用方转空行)
+- (nullable NSString *)cellStringForTable:(NSTableView *)tv
+                                     row:(NSInteger)row
+                                   ident:(NSString *)ident {
+    NSDictionary *r = nil;
+    if (tv == _table && row >= 0 && row < (NSInteger)_results.count) r = _results[row];
+    else if (tv == _pvTable && row >= 0 && row < (NSInteger)_pvItems.count) r = _pvItems[row];
+    else if (tv == _lyTable && row >= 0 && row < (NSInteger)_lyResults.count) r = _lyResults[row];
+    if (!r) return nil;
+    if ([ident isEqualToString:@"ID"]) return [r[@"trackId"] stringValue] ?: @"";
+    if ([ident isEqualToString:@"曲名"]) return r[@"track"] ?: @"";
+    if ([ident isEqualToString:@"艺人"]) return r[@"artist"] ?: @"";
+    if ([ident isEqualToString:@"专辑"]) return r[@"album"] ?: @"";
+    if ([ident isEqualToString:@"区"]) return r[@"src"] ?: @"";
+    if ([ident isEqualToString:@"文件名"]) return r[@"name"] ?: @"";
+    if ([ident isEqualToString:@"大小"]) return r[@"sizeText"] ?: @"";
+    if ([ident isEqualToString:@"来源"]) return r[@"sourceName"] ?: @"";
+    if ([ident isEqualToString:@"歌名"]) return r[@"name"] ?: @"";
+    if ([ident isEqualToString:@"歌手"]) return r[@"singer"] ?: @"";
+    if ([ident isEqualToString:@"时长"]) return r[@"durText"] ?: @"";
+    return @"";
 }
 
 - (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
     if (tv != _sideTable) {
-        // 结果表同样 view-based:必须给 view,只靠 objectValue 行是空的(剩选中高亮)
-        if (tv != _table || row < 0 || row >= (NSInteger)_results.count) return nil;
-        NSString *ident = col.identifier;
-        NSTextField *tf = (NSTextField *)[tv makeViewWithIdentifier:ident owner:self];
+        // 内容表同样 view-based:必须给 view,只靠 objectValue 行是空的(剩选中高亮)
+        NSString *s = [self cellStringForTable:tv row:row ident:col.identifier];
+        if (!s) return nil;
+        NSTextField *tf = (NSTextField *)[tv makeViewWithIdentifier:col.identifier owner:self];
         if (!tf) {
             tf = [NSTextField labelWithString:@""];
-            tf.identifier = ident;
+            tf.identifier = col.identifier;
             tf.font = [NSFont systemFontOfSize:13];
             tf.textColor = [NSColor labelColor];
             tf.lineBreakMode = NSLineBreakByTruncatingTail;
             tf.maximumNumberOfLines = 1;
         }
-        NSDictionary *r = _results[row];
-        if ([ident isEqualToString:@"ID"]) tf.stringValue = [r[@"trackId"] stringValue] ?: @"";
-        else if ([ident isEqualToString:@"曲名"]) tf.stringValue = r[@"track"] ?: @"";
-        else if ([ident isEqualToString:@"艺人"]) tf.stringValue = r[@"artist"] ?: @"";
-        else if ([ident isEqualToString:@"专辑"]) tf.stringValue = r[@"album"] ?: @"";
-        else if ([ident isEqualToString:@"区"]) tf.stringValue = r[@"src"] ?: @"";
-        else tf.stringValue = @"";
+        tf.stringValue = s;
         return tf;
     }
     NSDictionary *item = self.sideItems[row];
@@ -301,6 +342,11 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         @"tb.download": @{@"title": @"开始下载", @"symbol": @"arrow.down.circle", @"action": @"startDownload:"},
         @"tb.cache":    @{@"title": @"缓存直解", @"symbol": @"tray.and.arrow.down", @"action": @"startDownloadCache:"},
         @"tb.follow":   @{@"title": @"跟随收割", @"symbol": @"dot.radiowaves.left.and.right", @"action": @"toggleFollow:"},
+        // 预览页
+        @"tb.pv.refresh": @{@"title": @"刷新列表", @"symbol": @"arrow.triangle.2.circlepath", @"action": @"refreshPreview:"},
+        // 歌词页
+        @"tb.ly.search": @{@"title": @"查歌词", @"symbol": @"text.magnifyingglass", @"action": @"lyricSearch:"},
+        @"tb.ly.save":   @{@"title": @"保存歌词", @"symbol": @"square.and.arrow.down", @"action": @"lyricSave:"},
         // 日志页
         @"tb.clear":   @{@"title": @"清空日志", @"symbol": @"trash", @"action": @"clearLog:"},
         @"tb.copy":    @{@"title": @"复制日志", @"symbol": @"doc.on.doc", @"action": @"copyLog:"},
@@ -313,7 +359,9 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         case 1: return @[@"tb.launch", @"tb.kit", @"tb.install", @"tb.restart"];
         case 2: return @[@"tb.search", @"tb.fill"];
         case 3: return @[@"tb.download", @"tb.cache", @"tb.follow"];
-        case 4: return @[@"tb.clear", @"tb.copy"];
+        case 4: return @[@"tb.pv.refresh"];
+        case 5: return @[@"tb.ly.search", @"tb.ly.save"];
+        case 6: return @[@"tb.clear", @"tb.copy"];
         default: return @[];
     }
 }
@@ -546,6 +594,8 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         case 1: return [self buildDevicePage];
         case 2: return [self buildSearchPage];
         case 3: return [self buildDownloadPage];
+        case 4: return [self buildPreviewPage];
+        case 5: return [self buildLyricPage];
         default: return [self buildLogPage];
     }
 }
@@ -743,7 +793,149 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     return [self scrollWrap:page];
 }
 
-/// ⑤ 日志:只读输出。清空/复制在工具栏。
+- (NSPopUpButton *)popWithTitles:(NSArray<NSString *> *)titles {
+    NSPopUpButton *p = [[NSPopUpButton alloc] init];
+    [p addItemsWithTitles:titles];
+    [p selectItemAtIndex:0];
+    return p;
+}
+
+// 内容表(搜索/预览/歌词三表同构):列定义 @[@[标题, 宽], ...],双击动作可空
+- (NSTableView *)contentTable:(NSArray<NSArray *> *)cols action:(nullable SEL)sel {
+    NSTableView *t = [[NSTableView alloc] initWithFrame:NSMakeRect(0, 0, 800, 140)];
+    t.autoresizingMask = NSViewWidthSizable;
+    t.rowHeight = 22;
+    for (NSArray *c in cols) {
+        NSTableColumn *tcol = [[NSTableColumn alloc] initWithIdentifier:c[0]];
+        tcol.title = c[0];
+        tcol.width = [c[1] doubleValue];
+        [t addTableColumn:tcol];
+    }
+    t.delegate = self;
+    t.dataSource = self;
+    t.target = self;
+    if (sel) t.doubleAction = sel;
+    t.backgroundColor = [NSColor clearColor];
+    return t;
+}
+
+// 表格滚动容器(吃掉剩余高度);调用方先 addArrangedSubview 再调本方法做约束(先入列后激活)
+- (NSScrollView *)tableScroll:(NSTableView *)t {
+    NSScrollView *ts = [[NSScrollView alloc] init];
+    ts.documentView = t;
+    ts.hasVerticalScroller = YES;
+    ts.hasHorizontalScroller = NO;   // 列宽按最小窗口设计,宁可用省略号也不出横向滚动条
+    ts.drawsBackground = NO;
+    ts.autohidesScrollers = YES;
+    ts.translatesAutoresizingMaskIntoConstraints = NO;
+    return ts;
+}
+
+/// ⑤ 预览:输出目录 .m4a 清单(只认 m4a;同名 .json 有则读 artist/title,无则回退文件名)。
+/// 主操作 → 工具栏「刷新列表」;双击行把文件名填进歌词页(单曲模式)并跳过去。
+- (NSView *)buildPreviewPage {
+    NSStackView *page = [self pageStack];
+    _pvTable = [self contentTable:@[@[@"文件名", @260], @[@"艺人", @150], @[@"曲名", @180], @[@"大小", @80]]
+                           action:@selector(fillFromPreview:)];
+    NSScrollView *ts = [self tableScroll:_pvTable];
+    _pvHintL = [NSTextField labelWithString:@""];
+    [page addArrangedSubview:ts];
+    [page addArrangedSubview:_pvHintL];
+    [self stretchChildren:page];
+    [ts.heightAnchor constraintGreaterThanOrEqualToConstant:180].active = YES;
+    [ts setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+    {
+        NSStackView *v = [self formStack];
+        NSStackView *r = [self row];
+        [r addViews:@[[self button:@"打开输出目录" action:@selector(openOutDir:)]]];
+        [v addViews:@[r]];
+        [v addViews:@[
+            [self hint:@"只列 .m4a;艺人/曲名优先读同名 .json(跟随收割与下载都会写),没有就从文件名猜。双击一行=填入歌词页。"],
+        ]];
+        [self stretchChildren:v];
+        [self addCard:[self glassCard:@"成品" body:v] toPage:page];
+    }
+    return page;
+}
+
+/// ⑥ 歌词:单曲模式。目标(搜索名+文件名)→ 搜索选源 → 输出选项 → 互转。查/存是页面主操作 → 工具栏。
+- (NSView *)buildLyricPage {
+    NSStackView *page = [self pageStack];
+    {
+        NSStackView *v = [self formStack];
+        _lyKeyF = [self field:@"如 9Lana - BLUE MOON,可从预览页双击填入" width:0];
+        _lyKeyF.target = self;
+        _lyKeyF.action = @selector(lyricSearch:);   // 回车直接查
+        [v addViews:@[
+            [self formRow:@"搜索名" items:@[_lyKeyF]],
+            [self hint:@"歌词源(网易云/QQ)按这个名字搜;要是文件名带艺人-曲名,直接用也行。"],
+        ]];
+        _lyFileF = [self field:@"目标 m4a 路径(预览页双击填入,或手动选)" width:0];
+        [v addViews:@[
+            [self formRow:@"文件名" items:@[_lyFileF, [self button:@"选择…" action:@selector(browseLyricFile:)]]],
+            [self hint:@"内嵌/外置都以这个文件为基准(外置写同名 .lrc/.srt;相对路径按输出目录解)。"],
+        ]];
+        [self stretchChildren:v];
+        [self addCard:[self glassCard:@"目标" body:v] toPage:page];
+    }
+    {
+        NSStackView *v = [self formStack];
+        NSStackView *r = [self row];
+        _lyNEBtn = [NSButton checkboxWithTitle:@"网易云" target:nil action:nil];
+        _lyQQBtn = [NSButton checkboxWithTitle:@"QQ音乐" target:nil action:nil];
+        [r addViews:@[[self label:@"歌词源" width:44], _lyNEBtn, _lyQQBtn]];
+        [v addArrangedSubview:r];
+        _lyTable = [self contentTable:@[@[@"来源", @60], @[@"歌名", @200], @[@"歌手", @150], @[@"时长", @60]]
+                               action:nil];
+        NSScrollView *ts = [self tableScroll:_lyTable];
+        [v addArrangedSubview:ts];
+        _lyHintL = [NSTextField labelWithString:@"尚未搜索。"];
+        _lyHintL.font = [NSFont systemFontOfSize:12];
+        [v addArrangedSubview:_lyHintL];
+        [v addViews:@[
+            [self hint:@"两源合并一表,网易云在前;点中一行再按工具栏「保存歌词」。"],
+        ]];
+        [self stretchChildren:v];
+        [self addCard:[self glassCard:@"搜索" body:v] toPage:page];
+        [ts.heightAnchor constraintGreaterThanOrEqualToConstant:140].active = YES;
+        [ts setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+    }
+    {
+        NSStackView *v = [self formStack];
+        _lyModeP = [self popWithTitles:@[@"内嵌m4a", @"外置lrc", @"外置srt"]];
+        _lyEncP = [self popWithTitles:@[@"UTF-8", @"GB18030", @"UTF-16"]];
+        _lyLayoutP = [self popWithTitles:@[@"交错", @"独立", @"合并"]];
+        _lySepF = [self field:@" / " width:60];
+        [v addViews:@[
+            [self formRow:@"输出" items:@[_lyModeP, [self label:@"编码" width:32], _lyEncP]],
+            [self hint:@"内嵌=写进 m4a 的歌词原子(可重打);外置=同目录同名文本(编码只对外置有效)。"],
+            [self formRow:@"双语" items:@[_lyLayoutP, [self label:@"分隔" width:32], _lySepF]],
+            [self hint:@"交错=原文译文按时间穿插;独立=各轨顺接;合并=同时间戳拼一行(用分隔符)。"],
+        ]];
+        [self stretchChildren:v];
+        [self addCard:[self glassCard:@"输出选项" body:v] toPage:page];
+    }
+    {
+        NSStackView *v = [self formStack];
+        _lyConvSrcF = [self field:@"源文件(.lrc/.srt/.m4a)" width:0];
+        _lyConvP = [self popWithTitles:@[@"lrc→srt", @"srt→lrc", @"文本→m4a内嵌", @"m4a内嵌→lrc", @"m4a内嵌→srt"]];
+        NSStackView *r = [self row];
+        [r addViews:@[_lyConvP, [self button:@"开始转换" action:@selector(lyricConvert:)]]];
+        [v addViews:@[
+            [self formRow:@"源文件" items:@[_lyConvSrcF, [self button:@"选择…" action:@selector(browseConvSrc:)]]],
+        ]];
+        [v addArrangedSubview:r];
+        [v addViews:@[
+            [self hint:@"lrc↔srt 纯文本互转(时间戳零漂移);文本→m4a 把同名文本嵌进去;m4a→文本把内嵌词导出来。目标默认同目录同名。"],
+        ]];
+        [self stretchChildren:v];
+        [self addCard:[self glassCard:@"互转" body:v] toPage:page];
+    }
+    [self loadLyricConfigToUI];   // 懒建:控件现在才出生,把已存配置刷上去
+    return [self scrollWrap:page];
+}
+
+/// ⑦ 日志:只读输出。清空/复制在工具栏。
 - (NSView *)buildLogPage {
     NSStackView *page = [self pageStack];
     NSScrollView *ls = [[NSScrollView alloc] init];
@@ -785,6 +977,24 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     _scriptDirF.stringValue = c.scriptDir ?: @"";
     _outDirF.stringValue = c.outDir ?: @"";
     _useTcpC.state = c.useTcp ? NSControlStateValueOn : NSControlStateValueOff;
+    [self loadLyricConfigToUI];
+}
+
+// 歌词选项 UI ↔ 配置(页面懒建,load 时控件可能 nil,消息空转安全)
+- (void)loadLyricConfigToUI {
+    AMDConfig *c = [AMDConfig shared];
+    NSArray *modes = @[@"embed", @"lrc", @"srt"];
+    NSArray *layouts = @[@"stagger", @"isolated", @"merge"];
+    NSArray *encs = @[@"UTF-8", @"GB18030", @"UTF-16"];
+    NSInteger mi = [modes indexOfObject:c.lyricMode];
+    [_lyModeP selectItemAtIndex:(mi == NSNotFound || mi > 2) ? 0 : mi];
+    NSInteger li = [layouts indexOfObject:c.lyricLayout];
+    [_lyLayoutP selectItemAtIndex:(li == NSNotFound || li > 2) ? 0 : li];
+    NSInteger ei = [encs indexOfObject:c.lyricEncoding];
+    [_lyEncP selectItemAtIndex:(ei == NSNotFound || ei > 2) ? 0 : ei];
+    _lySepF.stringValue = c.lyricMergeSep ?: @" / ";
+    _lyNEBtn.state = c.lyricUseNE ? NSControlStateValueOn : NSControlStateValueOff;
+    _lyQQBtn.state = c.lyricUseQQ ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
 // 只允许主线程调(读的是输入框,后台任务请先在动作入口同步好再 dispatch)
@@ -800,6 +1010,27 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     c.scriptDir = [_scriptDirF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     c.outDir = [_outDirF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     c.useTcp = (_useTcpC.state == NSControlStateValueOn);
+    [self readLyricUIToConfig];
+}
+
+// 歌词页没建出来(_lyModeP 为 nil)就不碰配置,免得把已存值洗成默认
+- (void)readLyricUIToConfig {
+    if (!_lyModeP) return;
+    AMDConfig *c = [AMDConfig shared];
+    NSArray *modes = @[@"embed", @"lrc", @"srt"];
+    NSArray *layouts = @[@"stagger", @"isolated", @"merge"];
+    NSArray *encs = @[@"UTF-8", @"GB18030", @"UTF-16"];
+    NSInteger mi = [_lyModeP indexOfSelectedItem];
+    c.lyricMode = (mi >= 0 && mi < 3) ? modes[mi] : @"embed";
+    NSInteger li = [_lyLayoutP indexOfSelectedItem];
+    c.lyricLayout = (li >= 0 && li < 3) ? layouts[li] : @"stagger";
+    NSInteger ei = [_lyEncP indexOfSelectedItem];
+    c.lyricEncoding = (ei >= 0 && ei < 3) ? encs[ei] : @"UTF-8";
+    NSString *sep = [_lySepF.stringValue stringByTrimmingCharactersInSet:
+                     [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    c.lyricMergeSep = sep.length ? _lySepF.stringValue : @" / ";
+    c.lyricUseNE = (_lyNEBtn.state == NSControlStateValueOn);
+    c.lyricUseQQ = (_lyQQBtn.state == NSControlStateValueOn);
 }
 
 - (void)saveConfig:(id)sender {
@@ -1126,20 +1357,13 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 #pragma mark - search table
 
 - (id)tableView:(NSTableView *)tv objectValueForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
-    if (row < 0 || row >= (NSInteger)_results.count) return @"";
-    NSDictionary *r = _results[row];
-    NSString *ident = col.identifier;
-    if ([ident isEqualToString:@"ID"]) return [r[@"trackId"] stringValue];
-    if ([ident isEqualToString:@"曲名"]) return r[@"track"];
-    if ([ident isEqualToString:@"艺人"]) return r[@"artist"];
-    if ([ident isEqualToString:@"专辑"]) return r[@"album"];
-    if ([ident isEqualToString:@"区"]) return r[@"src"];
-    return @"";
+    if (tv == _sideTable) return @"";
+    return [self cellStringForTable:tv row:row ident:col.identifier] ?: @"";
 }
 
-// 交替行底色(半透明,透出玻璃);macOS 没有自定义交替色属性,走 delegate。仅结果表。
+// 交替行底色(半透明,透出玻璃);macOS 没有自定义交替色属性,走 delegate。三个内容表通用。
 - (void)tableView:(NSTableView *)tableView didAddRowView:(NSTableRowView *)rowView forRow:(NSInteger)row {
-    if (tableView != _table) return;
+    if (tableView != _table && tableView != _pvTable && tableView != _lyTable) return;
     rowView.backgroundColor = (row % 2) ? [NSColor colorWithWhite:1.0 alpha:0.05] : [NSColor clearColor];
 }
 
@@ -1185,6 +1409,295 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     _searchHintL.stringValue = [NSString stringWithFormat:@"已填入 %@ — 到「下载」页开下", adam];
     [self appendLog:[NSString stringWithFormat:@"[搜索] 填入 adamId=%@ (%@ — %@)\n",
                      adam, _results[row][@"track"], _results[row][@"artist"]]];
+}
+
+#pragma mark - preview & lyric
+
+// 目标 m4a 路径归一:绝对路径直接用;相对按输出目录解;不存在/非 m4a 返回 nil
+- (nullable NSString *)resolveLyricTarget:(NSString *)s {
+    NSString *t = [s stringByTrimmingCharactersInSet:
+                   [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!t.length) return nil;
+    if (![t isAbsolutePath])
+        t = [[AMDConfig shared].outDir stringByAppendingPathComponent:t];
+    if (![[t.pathExtension lowercaseString] isEqualToString:@"m4a"]) return nil;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:t]) return nil;
+    return t;
+}
+
+- (void)refreshPreview:(id)sender {
+    AMDDBG(@"action: refreshPreview");
+    [self readUIToConfig];
+    NSString *dir = [AMDConfig shared].outDir;
+    _pvHintL.stringValue = @"扫描中…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSArray *files = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:NULL];
+        NSMutableArray *items = [NSMutableArray array];
+        for (NSString *fn in [files sortedArrayUsingSelector:@selector(localizedStandardCompare:)]) {
+            if (![[fn.pathExtension lowercaseString] isEqualToString:@"m4a"]) continue;
+            NSString *full = [dir stringByAppendingPathComponent:fn];
+            NSString *base = [fn stringByDeletingPathExtension];
+            NSString *artist = nil, *title = nil;
+            // 同名 .json 有则读 artist/title(下载与跟随收割都会写)
+            NSString *jp = [[full stringByDeletingPathExtension] stringByAppendingPathExtension:@"json"];
+            NSDictionary *j = [NSJSONSerialization JSONObjectWithData:
+                               [[NSData alloc] initWithContentsOfFile:jp] options:0 error:NULL];
+            if ([j isKindOfClass:[NSDictionary class]]) {
+                if ([j[@"artist"] length]) artist = j[@"artist"];
+                if ([j[@"title"] length]) title = j[@"title"];
+            }
+            if (!artist || !title) {
+                // 回退:文件名 "艺人 - 曲名" 切分
+                NSRange r = [base rangeOfString:@" - "];
+                if (r.location != NSNotFound) {
+                    if (!artist) artist = [base substringToIndex:r.location];
+                    if (!title) title = [base substringFromIndex:r.location + r.length];
+                }
+            }
+            unsigned long long sz = [[[NSFileManager defaultManager]
+                                      attributesOfItemAtPath:full error:NULL] fileSize];
+            NSString *sizeText = sz > 1048576 ?
+                [NSString stringWithFormat:@"%.1fMB", sz / 1048576.0] :
+                [NSString stringWithFormat:@"%.0fKB", sz / 1024.0];
+            [items addObject:@{ @"file": full, @"name": base,
+                                @"artist": artist ?: @"?", @"title": title ?: base,
+                                @"sizeText": sizeText }];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_pvItems removeAllObjects];
+            [self->_pvItems addObjectsFromArray:items];
+            [self->_pvTable reloadData];
+            self->_pvHintL.stringValue =
+                [NSString stringWithFormat:@"共 %lu 个 — 双击行填入歌词页", (unsigned long)items.count];
+            [self appendLog:[NSString stringWithFormat:@"[预览] %@ 共 %lu 个 m4a\n", dir, (unsigned long)items.count]];
+        });
+    });
+}
+
+// 预览双击:文件名→歌词页搜索名,全路径→文件名框(单曲模式),并跳到歌词页
+- (void)fillFromPreview:(id)sender {
+    AMDDBG(@"action: fillFromPreview");
+    NSInteger row = _pvTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)_pvItems.count) {
+        _pvHintL.stringValue = @"先在表中选一行(可双击)";
+        return;
+    }
+    NSDictionary *it = _pvItems[row];
+    // 先切页(懒建)再填,顺序不能反
+    [_sideTable selectRowIndexes:[NSIndexSet indexSetWithIndex:5] byExtendingSelection:NO];
+    [self switchToSection:5];
+    _lyKeyF.stringValue = it[@"name"] ?: @"";
+    _lyFileF.stringValue = it[@"file"] ?: @"";
+    [self appendLog:[NSString stringWithFormat:@"[预览] 已填入歌词页: %@\n", it[@"name"]]];
+}
+
+- (void)browseLyricFile:(id)sender {
+    AMDDBG(@"action: browseLyricFile");
+    [self pickExecutableInto:_lyFileF];
+}
+
+- (void)browseConvSrc:(id)sender {
+    AMDDBG(@"action: browseConvSrc");
+    [self pickExecutableInto:_lyConvSrcF];
+}
+
+- (void)lyricSearch:(id)sender {
+    AMDDBG(@"action: lyricSearch");
+    [self readUIToConfig];
+    NSString *kw = [_lyKeyF.stringValue stringByTrimmingCharactersInSet:
+                    [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!kw.length) { _lyHintL.stringValue = @"先填搜索名(可从预览页双击填入)"; return; }
+    AMDConfig *c = [AMDConfig shared];
+    NSMutableArray *srcs = [NSMutableArray array];
+    if (c.lyricUseNE) [srcs addObject:@"ne"];
+    if (c.lyricUseQQ) [srcs addObject:@"qq"];
+    if (!srcs.count) { _lyHintL.stringValue = @"至少勾一个歌词源"; return; }
+    _lyHintL.stringValue = @"搜索中…";
+    [self appendLog:[NSString stringWithFormat:@"[歌词] 搜 \"%@\"…\n", kw]];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *e = nil;
+        NSArray *res = [OBLyricSearch search:kw limit:10 sources:srcs
+                                        logf:^(NSString *l) { [self appendLog:[l stringByAppendingString:@"\n"]]; }
+                                       error:&e];
+        NSMutableArray *rows = [NSMutableArray array];
+        for (NSDictionary *s in res) {
+            NSMutableDictionary *m = [s mutableCopy];
+            long ms = [s[@"duration"] longValue];
+            m[@"durText"] = ms > 0 ?
+                [NSString stringWithFormat:@"%ld:%02ld", ms / 60000, (ms % 60000) / 1000] : @"";
+            [rows addObject:m];
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_lyResults removeAllObjects];
+            [self->_lyResults addObjectsFromArray:rows];
+            [self->_lyTable reloadData];
+            self->_lyHintL.stringValue = rows.count ?
+                [NSString stringWithFormat:@"共 %lu 条 — 点中一行再按「保存歌词」", (unsigned long)rows.count] :
+                (e ?: @"无结果,换个名字试试");
+        });
+    });
+}
+
+// 取词 → 按配置排版 → 内嵌/外置落盘
+- (void)lyricSave:(id)sender {
+    AMDDBG(@"action: lyricSave");
+    [self readUIToConfig];
+    NSInteger row = _lyTable.selectedRow;
+    if (row < 0 || row >= (NSInteger)_lyResults.count) {
+        _lyHintL.stringValue = @"先搜出来并点中一行";
+        return;
+    }
+    NSString *target = [self resolveLyricTarget:_lyFileF.stringValue];
+    if (!target) { _lyHintL.stringValue = @"文件名无效(填已存在的 m4a 路径)"; return; }
+    NSDictionary *song = _lyResults[row];
+    AMDConfig *c = [AMDConfig shared];
+    NSString *mode = c.lyricMode, *enc = c.lyricEncoding;
+    NSString *layout = c.lyricLayout, *sep = c.lyricMergeSep;
+    _lyHintL.stringValue = @"取词保存中…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *e = nil;
+        NSDictionary *ly = [OBLyricSearch lyricFor:song
+                                              logf:^(NSString *l) { [self appendLog:[l stringByAppendingString:@"\n"]]; }
+                                             error:&e];
+        NSString *fail = nil, *done = nil;
+        if (ly) {
+            NSArray *tracks = [self lyricTracks:ly source:song[@"source"] error:&e];
+            NSString *body = tracks ? [self renderLyricTracks:tracks layout:layout sep:sep] : nil;
+            if (!body) fail = e ?: @"排版失败";
+            else if ([mode isEqualToString:@"embed"]) {
+                NSMutableData *d = [[NSMutableData alloc] initWithContentsOfFile:target];
+                if (!d) fail = @"读 m4a 失败";
+                else if (![OBMP4 applyLyrics:d lyrics:body error:&e]) fail = e ?: @"内嵌失败";
+                else if (![d writeToFile:target atomically:YES]) fail = @"写回失败";
+                else done = [NSString stringWithFormat:@"内嵌 %@ (%lu 字)", target.lastPathComponent, (unsigned long)body.length];
+            } else {
+                NSString *ext = [mode isEqualToString:@"srt"] ? @"srt" : @"lrc";
+                NSString *out = [[target stringByDeletingPathExtension] stringByAppendingPathExtension:ext];
+                NSString *text = body;
+                if ([ext isEqualToString:@"srt"]) {
+                    NSArray *lines = [OBLyric parseLRC:body source:OBLyricSourceGeneric ignoreEmpty:YES];
+                    text = [OBLyric srtString:lines durationMs:[song[@"duration"] longValue]];
+                }
+                if (![OBLyric writeFile:text to:out encoding:enc error:&e]) fail = e ?: @"写文件失败";
+                else done = [NSString stringWithFormat:@"外置 %@ (%@)", out.lastPathComponent, enc];
+            }
+        } else fail = e;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_lyHintL.stringValue = done ?: (fail ?: @"失败");
+            [self appendLog:[NSString stringWithFormat:@"[歌词] %@\n", done ? [@"✅ " stringByAppendingString:done] : [@"❌ " stringByAppendingString:fail ?: @"?"]]];
+        });
+    });
+}
+
+// 取词 dict → 排好序的三轨(原文/译文/音译,有则收);译文对齐到原文(±500ms,缺失补空)
+- (nullable NSArray<NSArray *> *)lyricTracks:(NSDictionary *)ly
+                                      source:(NSString *)src
+                                       error:(NSString **)err {
+    OBLyricSource s = [src isEqualToString:@"qq"] ? OBLyricSourceQQ : OBLyricSourceGeneric;
+    NSArray *o = [OBLyric parseLRC:ly[@"lyric"] source:s ignoreEmpty:YES];
+    if (!o.count) { if (err) *err = @"原文为空"; return nil; }
+    NSMutableArray *tracks = [NSMutableArray arrayWithObject:o];
+    for (NSString *k in @[@"trans", @"roma"]) {
+        NSString *t = ly[k];
+        if (![t isKindOfClass:[NSString class]] || !t.length) continue;
+        NSArray *parsed = [OBLyric parseLRC:t source:s ignoreEmpty:YES];
+        if (parsed.count)
+            [tracks addObject:[OBLyric alignTrans:parsed toOrigin:o deviation:500
+                                        lostRule:OBLyricLostEmpty]];
+    }
+    return tracks;
+}
+
+- (NSString *)renderLyricTracks:(NSArray *)tracks layout:(NSString *)layout sep:(NSString *)sep {
+    if ([layout isEqualToString:@"merge"])
+        return [OBLyric lrcString:[OBLyric renderMerge:tracks separator:sep.length ? sep : @" / "]];
+    if ([layout isEqualToString:@"isolated"]) {
+        NSMutableArray *parts = [NSMutableArray array];
+        for (NSArray *t in [OBLyric renderIsolated:tracks]) [parts addObject:[OBLyric lrcString:t]];
+        return [parts componentsJoinedByString:@"\n"];
+    }
+    return [OBLyric lrcString:[OBLyric renderStagger:tracks]];
+}
+
+// 互转卡:lrc↔srt / 文本→m4a内嵌 / m4a内嵌→文本
+- (void)lyricConvert:(id)sender {
+    AMDDBG(@"action: lyricConvert");
+    [self readUIToConfig];
+    NSString *src = [_lyConvSrcF.stringValue stringByTrimmingCharactersInSet:
+                     [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!src.length || ![[NSFileManager defaultManager] fileExistsAtPath:src]) {
+        _lyHintL.stringValue = @"先填存在的源文件";
+        return;
+    }
+    NSInteger dir = [_lyConvP indexOfSelectedItem];
+    AMDConfig *c = [AMDConfig shared];
+    NSString *enc = c.lyricEncoding;
+    NSString *base = [src stringByDeletingPathExtension];
+    _lyHintL.stringValue = @"转换中…";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *e = nil, *done = nil;
+        if (dir == 0 || dir == 1) {
+            // lrc→srt / srt→lrc
+            NSDictionary *rd = [OBLyric readFile:src error:&e];
+            NSString *out = nil;
+            if (rd) {
+                if (dir == 0) {
+                    NSArray *lines = [OBLyric parseLRC:rd[@"text"] source:OBLyricSourceGeneric ignoreEmpty:NO];
+                    NSMutableArray *timed = [NSMutableArray array];
+                    for (NSDictionary *l in lines)
+                        if ([l[@"ms"] longValue] >= 0) [timed addObject:l];
+                    out = [OBLyric srtString:timed durationMs:0];
+                    NSString *dst = [base stringByAppendingPathExtension:@"srt"];
+                    if ([OBLyric writeFile:out to:dst encoding:enc error:&e]) done = dst.lastPathComponent;
+                } else {
+                    NSArray *lines = [OBLyric parseSRT:rd[@"text"]];
+                    if (!lines.count) e = @"SRT 解析为空";
+                    else {
+                        out = [OBLyric lrcString:lines];
+                        NSString *dst = [base stringByAppendingPathExtension:@"lrc"];
+                        if ([OBLyric writeFile:out to:dst encoding:enc error:&e]) done = dst.lastPathComponent;
+                    }
+                }
+            }
+            if (!done && !e) e = @"转换失败";
+        } else if (dir == 2) {
+            // 文本→m4a内嵌(同名 m4a 必须存在;srt 先转 lrc)
+            NSString *dst = [base stringByAppendingPathExtension:@"m4a"];
+            NSDictionary *rd = [OBLyric readFile:src error:&e];
+            NSString *body = nil;
+            if (rd) {
+                if ([[src.pathExtension lowercaseString] isEqualToString:@"srt"]) {
+                    NSArray *lines = [OBLyric parseSRT:rd[@"text"]];
+                    if (!lines.count) e = @"SRT 解析为空";
+                    else body = [OBLyric lrcString:lines];
+                } else body = rd[@"text"];
+            }
+            NSMutableData *d = (body && !e) ? [[NSMutableData alloc] initWithContentsOfFile:dst] : nil;
+            if (!d) e = e ?: @"同名 m4a 不存在";
+            else if (![OBMP4 applyLyrics:d lyrics:body error:&e]) e = e ?: @"内嵌失败";
+            else if (![d writeToFile:dst atomically:YES]) e = @"写回失败";
+            else done = [NSString stringWithFormat:@"%@ ← %@", dst.lastPathComponent, src.lastPathComponent];
+        } else {
+            // m4a内嵌→lrc / →srt
+            NSData *d = [[NSData alloc] initWithContentsOfFile:src];
+            NSString *lrc = d ? [OBMP4 readLyrics:d error:&e] : nil;
+            if (!lrc) e = e ?: @"无内嵌歌词";
+            else {
+                NSString *ext = (dir == 4) ? @"srt" : @"lrc";
+                NSString *text = lrc;
+                if (dir == 4) {
+                    NSArray *lines = [OBLyric parseLRC:lrc source:OBLyricSourceGeneric ignoreEmpty:YES];
+                    text = [OBLyric srtString:lines durationMs:0];
+                }
+                NSString *dst = [base stringByAppendingPathExtension:ext];
+                if ([OBLyric writeFile:text to:dst encoding:enc error:&e]) done = dst.lastPathComponent;
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_lyHintL.stringValue = done ?: (e ?: @"失败");
+            [self appendLog:[NSString stringWithFormat:@"[互转] %@\n", done ? [@"✅ " stringByAppendingString:done] : [@"❌ " stringByAppendingString:e ?: @"?"]]];
+        });
+    });
 }
 
 #pragma mark - download

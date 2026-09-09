@@ -23,6 +23,12 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     self.scriptDir = @"/Users/bemly/Projects/amd";
     self.outDir = @"/Users/bemly/Projects/amd/downloads";
     self.useTcp = YES;
+    self.lyricMode = @"embed";
+    self.lyricEncoding = @"UTF-8";
+    self.lyricLayout = @"stagger";
+    self.lyricMergeSep = @" / ";
+    self.lyricUseNE = YES;
+    self.lyricUseQQ = YES;
 }
 
 - (void)load {
@@ -40,6 +46,15 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
         self.scriptDir = [d stringForKey:[kPfx stringByAppendingString:@"scriptDir"]] ?: self.scriptDir;
         self.outDir = [d stringForKey:[kPfx stringByAppendingString:@"outDir"]] ?: self.outDir;
         self.useTcp = [d boolForKey:[kPfx stringByAppendingString:@"useTcp"]];
+        self.lyricMode = [d stringForKey:[kPfx stringByAppendingString:@"lyricMode"]] ?: @"embed";
+        self.lyricEncoding = [d stringForKey:[kPfx stringByAppendingString:@"lyricEncoding"]] ?: @"UTF-8";
+        self.lyricLayout = [d stringForKey:[kPfx stringByAppendingString:@"lyricLayout"]] ?: @"stagger";
+        self.lyricMergeSep = [d stringForKey:[kPfx stringByAppendingString:@"lyricMergeSep"]] ?: @" / ";
+        // BOOL 无“是否存过”标记:与 useTcp 同策略,首次走 restoreDefaults(见上)
+        if ([d objectForKey:[kPfx stringByAppendingString:@"lyricUseNE"]] != nil) {
+            self.lyricUseNE = [d boolForKey:[kPfx stringByAppendingString:@"lyricUseNE"]];
+            self.lyricUseQQ = [d boolForKey:[kPfx stringByAppendingString:@"lyricUseQQ"]];
+        }
     } else {
         // 首次启动:探测 adb 路径
         NSString *found = [self detectAdbPath];
@@ -81,6 +96,12 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     [d setObject:self.scriptDir forKey:[kPfx stringByAppendingString:@"scriptDir"]];
     [d setObject:self.outDir forKey:[kPfx stringByAppendingString:@"outDir"]];
     [d setBool:self.useTcp forKey:[kPfx stringByAppendingString:@"useTcp"]];
+    [d setObject:self.lyricMode forKey:[kPfx stringByAppendingString:@"lyricMode"]];
+    [d setObject:self.lyricEncoding forKey:[kPfx stringByAppendingString:@"lyricEncoding"]];
+    [d setObject:self.lyricLayout forKey:[kPfx stringByAppendingString:@"lyricLayout"]];
+    [d setObject:self.lyricMergeSep forKey:[kPfx stringByAppendingString:@"lyricMergeSep"]];
+    [d setBool:self.lyricUseNE forKey:[kPfx stringByAppendingString:@"lyricUseNE"]];
+    [d setBool:self.lyricUseQQ forKey:[kPfx stringByAppendingString:@"lyricUseQQ"]];
     [d synchronize];
     AMDDBG(@"config: saved adb=%@ serial=%@ tcp=%@ useTcp=%d",
            self.adbPath, self.serial, self.tcpPort, self.useTcp);

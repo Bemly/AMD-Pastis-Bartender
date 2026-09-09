@@ -12,6 +12,14 @@
 @property (copy) NSString *scriptDir;  // download_tcp.py 所在目录
 @property (copy) NSString *outDir;     // 下载输出目录
 @property (assign) BOOL useTcp;        // 默认YES
+// 歌词(⑦页):输出方式 embed=内嵌m4a lrc=外置lrc srt=外置srt;排版 stagger=交错
+// isolated=独立 merge=合并;编码 UTF-8/GB18030/UTF-16
+@property (copy) NSString *lyricMode;
+@property (copy) NSString *lyricEncoding;
+@property (copy) NSString *lyricLayout;
+@property (copy) NSString *lyricMergeSep;
+@property (assign) BOOL lyricUseNE;
+@property (assign) BOOL lyricUseQQ;
 
 + (instancetype)shared;
 - (void)load;

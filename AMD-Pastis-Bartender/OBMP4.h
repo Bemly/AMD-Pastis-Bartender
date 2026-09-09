@@ -65,9 +65,18 @@ typedef struct { OBBox *v; int n; } OBBoxList;
 
 // 写入 iTunes 风格标签(在 moov 末尾补 udta→meta→hdlr→ilst,布局与参考工具产物逐字节对齐;
 // 已有标签 udta 则先删再写,可重打)。meta 键:title/artist/album/genre/date/track/track_total/
-// disc/copyright(NSString),cover(NSData, JPEG ffd8→类型13 / PNG→类型14,可缺)。
+// disc/copyright/lyrics(NSString;lyrics 为歌词全文,©lyr 文本原子),cover(NSData,
+// JPEG ffd8→类型13 / PNG→类型14,可缺)。
 // 就地修改 d;stco/stco64 块偏移同步平移。返回新长度,失败 0。
 + (uint32_t)applyTags:(NSMutableData *)d meta:(NSDictionary *)meta;
+
+// 只写歌词(©lyr):保留现有 ilst 条目原样,替换/追加后走同一套重建(旧标签不受影响)。
+// 就地修改 d;返回新长度,失败 0。
++ (uint32_t)applyLyrics:(NSMutableData *)d lyrics:(NSString *)text
+                  error:(NSString * _Nullable * _Nullable)err;
+
+// 读内嵌歌词(©lyr 文本原子,UTF-8);无则 nil。只读不改。
++ (nullable NSString *)readLyrics:(NSData *)d error:(NSString * _Nullable * _Nullable)err;
 
 @end
 

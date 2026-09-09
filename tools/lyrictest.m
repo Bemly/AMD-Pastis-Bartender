@@ -1,10 +1,13 @@
-// lyrictest.m — OBLyric 验收 CLI(L1 纯逻辑):
-//   真实网易云歌词做解析/对齐/排版/互转/编码对拍,时间戳零漂移。
+// lyrictest.m — OBLyric 验收 CLI(L1 纯逻辑 + L4 内嵌回环):
+//   真实网易云歌词做解析/对齐/排版/互转/编码对拍,时间戳零漂移;
+//   内嵌回环拿输出目录任一 m4a 副本做 applyLyrics→readLyrics(旧标签保留)。
 // 编译(仓库根目录):
 //   clang -arch arm64 -fobjc-arc -framework Foundation tools/lyrictest.m \
-//     AMD-Pastis-Bartender/OBLyric.m -o /tmp/lyrictest -I AMD-Pastis-Bartender && /tmp/lyrictest
+//     AMD-Pastis-Bartender/OBLyric.m AMD-Pastis-Bartender/OBMP4.m \
+//     -o /tmp/lyrictest -I AMD-Pastis-Bartender && /tmp/lyrictest
 #import <Foundation/Foundation.h>
 #import "OBLyric.h"
+#import "OBMP4.h"
 
 static int gFails = 0;
 static void Check(BOOL ok, const char *name, NSString *detail) {
@@ -103,6 +106,66 @@ int main(int argc, char **argv) {
         // 11. 多前缀展开
         NSArray *mp = [OBLyric parseLRC:@"[00:01.00][00:02.00]副歌" source:OBLyricSourceGeneric ignoreEmpty:YES];
         Check(mp.count == 2, "multi-前缀展开", [@(mp.count) stringValue]);
+
+        // 12. 内嵌回环:输出目录找任一 m4a 副本,写词→读回→旧标签保留
+        NSArray *cands = [[NSFileManager defaultManager]
+                          contentsOfDirectoryAtPath:@"/Users/bemly/Projects/amd/downloads" error:NULL];
+        NSString *src = nil;
+        for (NSString *fn in cands) {
+            if ([[fn.pathExtension lowercaseString] isEqualToString:@"m4a"]) {
+                src = [@"/Users/bemly/Projects/amd/downloads" stringByAppendingPathComponent:fn];
+                break;
+            }
+        }
+        if (!src) {
+            printf("[SKIP] embed-无m4a可测\n");
+        } else {
+            NSString *tmp = @"/tmp/lyric_embed_test.m4a";
+            [[NSFileManager defaultManager] removeItemAtPath:tmp error:NULL];
+            [[NSFileManager defaultManager] copyItemAtPath:src toPath:tmp error:NULL];
+            NSMutableData *d = [[NSMutableData alloc] initWithContentsOfFile:tmp];
+            unsigned long beforeLen = d.length;
+            NSString *e2 = nil;
+            NSString *sampleLrc = @"[00:10.18]依旧一如既往般如痴如狂\n[00:14.62]恋情总是转瞬即逝";
+            uint32_t nl = d ? [OBMP4 applyLyrics:d lyrics:sampleLrc error:&e2] : 0;
+            BOOL wok2 = nl > 0 && [d writeToFile:tmp atomically:YES];
+            NSString *back = wok2 ? [OBMP4 readLyrics:d error:&e2] : nil;
+            Check(wok2 && [back isEqualToString:sampleLrc], "embed-写读回环",
+                  wok2 ? [NSString stringWithFormat:@"%lu→%u", beforeLen, nl] : (e2 ?: @"?"));
+            // 重打幂等:再写一次,读回一致
+            NSMutableData *d2 = wok2 ? [[NSMutableData alloc] initWithContentsOfFile:tmp] : nil;
+            uint32_t nl2 = d2 ? [OBMP4 applyLyrics:d2 lyrics:sampleLrc error:NULL] : 0;
+            NSString *back2 = (nl2 > 0 && [d2 writeToFile:tmp atomically:YES]) ?
+                [OBMP4 readLyrics:d2 error:NULL] : nil;
+            Check([back2 isEqualToString:sampleLrc], "embed-重打幂等", @"");
+            // ffprobe 验证音频未坏(无 ffprobe 则跳过)
+            NSTask *wt = [[NSTask alloc] init];
+            wt.launchPath = @"/bin/zsh";
+            wt.arguments = @[@"-lc", @"which ffprobe"];
+            NSPipe *wp = [NSPipe pipe];
+            wt.standardOutput = wp;
+            @try { [wt launch]; [wt waitUntilExit]; } @catch (NSException *ex) {}
+            NSString *fp = [[[NSString alloc] initWithData:[[wp fileHandleForReading] readDataToEndOfFile]
+                                                  encoding:NSUTF8StringEncoding]
+                            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+            if (wt.terminationStatus == 0 && fp.length) {
+                NSTask *pt = [[NSTask alloc] init];
+                pt.launchPath = fp;
+                pt.arguments = @[@"-v", @"error", @"-count_packets", @"-select_streams", @"a:0",
+                                 @"-show_entries", @"stream=nb_read_packets", @"-of", @"csv=p=0", tmp];
+                NSPipe *pp = [NSPipe pipe];
+                pt.standardOutput = pp;
+                @try { [pt launch]; [pt waitUntilExit]; } @catch (NSException *ex) {}
+                NSString *pk = [[[NSString alloc] initWithData:[[pp fileHandleForReading] readDataToEndOfFile]
+                                                      encoding:NSUTF8StringEncoding]
+                                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                Check(pt.terminationStatus == 0 && pk.intValue > 0, "embed-音频完好",
+                      [NSString stringWithFormat:@"%@包", pk]);
+            } else {
+                printf("[SKIP] embed-ffprobe缺失\n");
+            }
+            [[NSFileManager defaultManager] removeItemAtPath:tmp error:NULL];
+        }
 
         printf(gFails ? "LYRICTEST FAIL(%d)\n" : "LYRICTEST OK\n", gFails);
         return gFails ? 1 : 0;

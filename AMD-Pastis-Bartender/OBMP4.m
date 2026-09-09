@@ -525,6 +525,9 @@ static NSMutableData *tagText(uint32_t fcc, NSString *s) {
 
 static void putU16(uint8_t *p, unsigned v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
 
+// 前向声明(定义在 applyTags 之后,两者共用 splice 逻辑)
+static uint32_t spliceNewUdta(NSMutableData *d, NSData *il);
+
 // meta 容器内的 hdlr:参考工具产物常量字节(33B,mdir/appl)
 static const uint8_t kMetaHdlr[33] = {
     0x00,0x00,0x00,0x21, 'h','d','l','r', 0,0,0,0, 0,0,0,0,
@@ -589,6 +592,7 @@ static void shiftChunks(const uint8_t *d, uint32_t off, uint32_t end, uint32_t i
     [il appendData:tagText(0xA967656E, meta[@"genre"]) ?: [NSData data]];
     [il appendData:tagText(0xA9646179, meta[@"date"]) ?: [NSData data]];
     [il appendData:tagText(FCC4('c','p','r','t'), meta[@"copyright"]) ?: [NSData data]];
+    [il appendData:tagText(0xA96C7972, meta[@"lyrics"]) ?: [NSData data]];   // ©lyr 歌词全文
     unsigned trk = [meta[@"track"] unsignedIntValue], trkTotal = [meta[@"track_total"] unsignedIntValue];
     if (trk) {
         uint8_t tp[8] = {0};
@@ -608,6 +612,65 @@ static void shiftChunks(const uint8_t *d, uint32_t off, uint32_t end, uint32_t i
         if (ctype) [il appendData:tagEntry(FCC4('c','o','v','r'), ctype, c, (uint32_t)cover.length)];
     }
     if (!il.length) return 0;
+    return spliceNewUdta(d, il);
+}
+
+// 只写歌词:保留现有 ilst 条目(©lyr 除外原样拷贝),替换/追加 ©lyr 后走同一套重建。
+// 标题/封面等旧标签不受影响,可反复重打。
++ (uint32_t)applyLyrics:(NSMutableData *)d lyrics:(NSString *)text error:(NSString **)err {
+    if (!text.length) { if (err) *err = @"歌词为空"; return 0; }
+    const uint8_t *b = d.bytes;
+    uint32_t len = (uint32_t)d.length;
+    NSMutableData *kept = [NSMutableData data];
+    OBBoxList top; [self parsePlain:b len:len from:0 to:len out:&top];
+    for (int i = 0; i < top.n; i++) {
+        if (top.v[i].type != kMoov) continue;
+        uint32_t mo = top.v[i].off, me = mo + top.v[i].size;
+        OBBoxList kids; [self parsePlain:b len:len from:mo + top.v[i].hdr to:me out:&kids];
+        for (int k = 0; k < kids.n; k++) {
+            if (kids.v[k].type != kUdta) continue;
+            uint32_t uo = kids.v[k].off, ue = uo + kids.v[k].size;
+            OBBoxList uk; [self parsePlain:b len:len from:uo + 8 to:ue out:&uk];
+            for (int m = 0; m < uk.n; m++) {
+                if (uk.v[m].type != FCC4('m','e','t','a')) continue;
+                uint32_t no = uk.v[m].off, ne = no + uk.v[m].size;
+                OBBoxList nk; [self parsePlain:b len:len from:no + 12 to:ne out:&nk];
+                for (int q = 0; q < nk.n; q++) {
+                    if (nk.v[q].type != FCC4('i','l','s','t')) continue;
+                    uint32_t io = nk.v[q].off, ie = io + nk.v[q].size;
+                    OBBoxList items; [self parsePlain:b len:len from:io + 8 to:ie out:&items];
+                    for (int t = 0; t < items.n; t++) {
+                        if (items.v[t].type == 0xA96C7972) continue;   // 旧 ©lyr 丢掉
+                        [kept appendBytes:b + items.v[t].off length:items.v[t].size];
+                    }
+                    [self freeList:&items];
+                }
+                [self freeList:&nk];
+            }
+            [self freeList:&uk];
+        }
+        [self freeList:&kids];
+    }
+    [self freeList:&top];
+    NSMutableData *il = [kept mutableCopy] ?: [NSMutableData data];
+    NSData *lyr = tagText(0xA96C7972, text);
+    if (!lyr) { if (err) *err = @"组装失败"; return 0; }
+    [il appendData:lyr];
+    uint32_t nl = spliceNewUdta(d, il);
+    if (!nl && err) *err = @"重建失败";
+    return nl;
+}
+
+// 新 udta(由 ilst 条目载荷组装)替换旧标签并重建文件;applyTags 与 applyLyrics 共用
+static uint32_t spliceNewUdta(NSMutableData *d, NSData *il) {
+    const uint8_t *b = d.bytes;
+    uint32_t len = (uint32_t)d.length;
+    OBBoxList top; [OBMP4 parsePlain:b len:len from:0 to:len out:&top];
+    int moovi = -1;
+    for (int i = 0; i < top.n; i++) if (top.v[i].type == kMoov) { moovi = i; break; }
+    if (moovi < 0) { [OBMP4 freeList:&top]; return 0; }
+    uint32_t moovOff = top.v[moovi].off, moovSize = top.v[moovi].size, moovHdr = top.v[moovi].hdr;
+    [OBMP4 freeList:&top];
     uint8_t ilh[8]; WR32(ilh, 0, (uint32_t)il.length + 8); WR32(ilh, 4, FCC4('i','l','s','t'));
     NSMutableData *ilstWrap = [NSMutableData data];
     [ilstWrap appendBytes:ilh length:8]; [ilstWrap appendData:il];
@@ -626,13 +689,13 @@ static void shiftChunks(const uint8_t *d, uint32_t off, uint32_t end, uint32_t i
     uint32_t insertPos = moovOff + moovSize;
     uint32_t removeOff = 0, removeLen = 0;
     {
-        OBBoxList kids; [self parsePlain:b len:len from:moovOff + moovHdr to:moovOff + moovSize out:&kids];
+        OBBoxList kids; [OBMP4 parsePlain:b len:len from:moovOff + moovHdr to:moovOff + moovSize out:&kids];
         for (int i = 0; i < kids.n; i++) {
             if (kids.v[i].type != FCC4('u','d','t','a')) continue;
-            OBBoxList uk; [self parsePlain:b len:len from:kids.v[i].off + 8 to:kids.v[i].off + kids.v[i].size out:&uk];
+            OBBoxList uk; [OBMP4 parsePlain:b len:len from:kids.v[i].off + 8 to:kids.v[i].off + kids.v[i].size out:&uk];
             BOOL hasMeta = NO;
             for (int j = 0; j < uk.n; j++) if (uk.v[j].type == FCC4('m','e','t','a')) { hasMeta = YES; break; }
-            [self freeList:&uk];
+            [OBMP4 freeList:&uk];
             if (hasMeta) { removeOff = kids.v[i].off; removeLen = kids.v[i].size; break; }
         }
         if (removeLen) {
@@ -640,7 +703,7 @@ static void shiftChunks(const uint8_t *d, uint32_t off, uint32_t end, uint32_t i
         } else {
             for (int i = 0; i < kids.n; i++) if (kids.v[i].type == kMvex) { insertPos = kids.v[i].off; break; }
         }
-        [self freeList:&kids];
+        [OBMP4 freeList:&kids];
     }
 
     // ---- 重建:[0,insertPos) + 新 udta + [insertPos+removeLen, len) ----
@@ -655,16 +718,92 @@ static void shiftChunks(const uint8_t *d, uint32_t off, uint32_t end, uint32_t i
     int32_t delta = (int32_t)udtaBox.length - (int32_t)removeLen;
     WR32(nb, moovOff, moovSize + delta);
     if (delta != 0) {
-        OBBoxList top2; [self parsePlain:nb len:(uint32_t)nd.length from:0 to:(uint32_t)nd.length out:&top2];
+        OBBoxList top2; [OBMP4 parsePlain:nb len:(uint32_t)nd.length from:0 to:(uint32_t)nd.length out:&top2];
         for (int i = 0; i < top2.n; i++) {
             if (top2.v[i].type == kMoov)
                 shiftChunks(nb, top2.v[i].off + top2.v[i].hdr, top2.v[i].off + top2.v[i].size, insertPos, delta);
         }
-        [self freeList:&top2];
+        [OBMP4 freeList:&top2];
     }
 
     [d setData:nd];
     return (uint32_t)nd.length;
+}
+
+#pragma mark - 内嵌歌词读取(©lyr)
+
++ (nullable NSString *)readLyrics:(NSData *)d error:(NSString **)err {
+    const uint8_t *b = d.bytes;
+    uint32_t len = (uint32_t)d.length;
+    if (len < 8) { if (err) *err = @"文件过小"; return nil; }
+    // moov → udta(含 meta) → meta → ilst → ©lyr → data,逐层下钻
+    OBBoxList top; [self parsePlain:b len:len from:0 to:len out:&top];
+    uint32_t moovOff = UINT32_MAX, moovHdr = 8, moovEnd = 0;
+    for (int i = 0; i < top.n; i++) {
+        if (top.v[i].type == kMoov) {
+            moovOff = top.v[i].off; moovHdr = top.v[i].hdr;
+            moovEnd = moovOff + top.v[i].size;
+            break;
+        }
+    }
+    [self freeList:&top];
+    if (moovOff == UINT32_MAX) { if (err) *err = @"无 moov"; return nil; }
+    OBBoxList kids; [self parsePlain:b len:len from:moovOff + moovHdr to:moovEnd out:&kids];
+    uint32_t udtaOff = UINT32_MAX, udtaEnd = 0;
+    for (int i = 0; i < kids.n; i++) {
+        if (kids.v[i].type != kUdta) continue;
+        uint32_t uo = kids.v[i].off, ue = uo + kids.v[i].size;
+        OBBoxList uk; [self parsePlain:b len:len from:uo + 8 to:ue out:&uk];
+        for (int j = 0; j < uk.n; j++) {
+            if (uk.v[j].type == FCC4('m','e','t','a')) { udtaOff = uo; udtaEnd = ue; break; }
+        }
+        [self freeList:&uk];
+        if (udtaOff != UINT32_MAX) break;
+    }
+    [self freeList:&kids];
+    if (udtaOff == UINT32_MAX) { if (err) *err = @"无标签"; return nil; }
+    // meta 内容从版本/标志 4B 后开始
+    OBBoxList mk; [self parsePlain:b len:len from:udtaOff + 8 to:udtaEnd out:&mk];
+    uint32_t metaOff = UINT32_MAX, metaEnd = 0;
+    for (int i = 0; i < mk.n; i++) {
+        if (mk.v[i].type == FCC4('m','e','t','a')) {
+            metaOff = mk.v[i].off; metaEnd = metaOff + mk.v[i].size;
+            break;
+        }
+    }
+    [self freeList:&mk];
+    if (metaOff == UINT32_MAX) return nil;
+    OBBoxList ik; [self parsePlain:b len:len from:metaOff + 8 + 4 to:metaEnd out:&ik];
+    uint32_t ilstOff = UINT32_MAX, ilstEnd = 0;
+    for (int i = 0; i < ik.n; i++) {
+        if (ik.v[i].type == FCC4('i','l','s','t')) {
+            ilstOff = ik.v[i].off; ilstEnd = ilstOff + ik.v[i].size;
+            break;
+        }
+    }
+    [self freeList:&ik];
+    if (ilstOff == UINT32_MAX) { if (err) *err = @"无 ilst"; return nil; }
+    OBBoxList items; [self parsePlain:b len:len from:ilstOff + 8 to:ilstEnd out:&items];
+    NSString *out = nil;
+    for (int i = 0; i < items.n && !out; i++) {
+        if (items.v[i].type != 0xA96C7972) continue;   // ©lyr
+        uint32_t io = items.v[i].off, ie = io + items.v[i].size;
+        OBBoxList dk; [self parsePlain:b len:len from:io + 8 to:ie out:&dk];
+        for (int j = 0; j < dk.n; j++) {
+            if (dk.v[j].type != FCC4('d','a','t','a')) continue;
+            uint32_t doff = dk.v[j].off, dsize = dk.v[j].size;
+            if (doff + 16 <= ie && doff + dsize <= len) {
+                uint32_t plen = dsize - 16;   // data 头 16B(尺寸+名+类型+locale)
+                out = [[NSString alloc] initWithBytes:b + doff + 16 length:plen
+                                             encoding:NSUTF8StringEncoding];
+            }
+            break;
+        }
+        [self freeList:&dk];
+    }
+    [self freeList:&items];
+    if (!out && err) *err = @"无内嵌歌词";
+    return out;
 }
 
 @end
