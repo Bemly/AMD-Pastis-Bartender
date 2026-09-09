@@ -168,6 +168,8 @@ int main(int argc, char **argv) {
             NSString *path = files[fi];
             NSString *base = [path.lastPathComponent stringByDeletingPathExtension];
             printf("[%lu/%lu] %s\n", fi + 1, (unsigned long)files.count, base.UTF8String);
+            // 间隔起手(放循环顶,所有 continue 路径都覆盖;失败风暴是上次限流的直接原因)
+            if (fi > 0 && sleepSecs > 0) [NSThread sleepForTimeInterval:sleepSecs];
             // 已有词跳过(断点续传)
             if (!force) {
                 NSData *probe = [[NSData alloc] initWithContentsOfFile:path];
@@ -180,7 +182,6 @@ int main(int argc, char **argv) {
                 }
             }
             // 查询链:全文件名 → 去括号曲名 → 曲名+艺人token;每轮后最高分≥10提前收
-            NSString *e = nil;
             void (^Log2)(NSString *) = ^(NSString *l){ Log(l); };
             NSString *titlePart = [[base componentsSeparatedByString:@" - "].lastObject ?: base
                                    stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
@@ -203,24 +204,44 @@ int main(int argc, char **argv) {
                 NSString *q = [NSString stringWithFormat:@"%@ %@", simple.length > 1 ? simple : base, tok];
                 if (queries.count < 4) [queries addObject:q];
             }
-            NSMutableArray *allRes = [NSMutableArray array];
-            NSMutableSet *seen = [NSMutableSet set];
+            __block NSString *e = nil;
+            __block BOOL chainLimited = NO;   // 本轮任一查询见过限流特征
             long localMs = LocalDurationMs(path);
-            for (NSString *q in queries) {
-                if (q != queries[0]) {
-                    NSInteger probe = -1;
-                    for (NSDictionary *s in allRes)
-                        probe = MAX(probe, ScoreSong(s, path.lastPathComponent, localMs));
-                    if (probe >= 10) break;   // 够用就别多搜
-                    printf("  [*] 当前最高%ld分,换查询 \"%s\" 再搜\n", (long)probe, q.UTF8String);
+            // 搜词链抽成 block(可整轮重跑;返回合并去重后的候选)
+            NSArray *(^runChain)(void) = ^NSArray *{
+                NSMutableArray *res2 = [NSMutableArray array];
+                NSMutableSet *seen2 = [NSMutableSet set];
+                chainLimited = NO;
+                for (NSString *q in queries) {
+                    if (q != queries[0]) {
+                        NSInteger probe = -1;
+                        for (NSDictionary *s in res2)
+                            probe = MAX(probe, ScoreSong(s, path.lastPathComponent, localMs));
+                        if (probe >= 10) break;   // 够用就别多搜
+                        printf("  [*] 当前最高%ld分,换查询 \"%s\" 再搜\n", (long)probe, q.UTF8String);
+                    }
+                    NSString *qe = nil;
+                    NSArray *more = [OBLyricSearch search:q limit:5 sources:nil logf:Log2 error:&qe];
+                    if (qe && ([qe containsString:@"操作频繁"] || [qe containsString:@"HTTP"] ||
+                               [qe containsString:@"429"] || [qe containsString:@"405"]))
+                        chainLimited = YES;
+                    if (!more.count && !res2.count) e = qe;
+                    for (NSDictionary *s in more) {
+                        NSString *k = [NSString stringWithFormat:@"%@_%@", s[@"source"], s[@"songId"]];
+                        if (![seen2 containsObject:k]) { [seen2 addObject:k]; [res2 addObject:s]; }
+                    }
                 }
-                NSString *qe = nil;
-                NSArray *more = [OBLyricSearch search:q limit:5 sources:nil logf:Log2 error:&qe];
-                if (!more.count && !allRes.count) e = qe;
-                for (NSDictionary *s in more) {
-                    NSString *k = [NSString stringWithFormat:@"%@_%@", s[@"source"], s[@"songId"]];
-                    if (![seen containsObject:k]) { [seen addObject:k]; [allRes addObject:s]; }
-                }
+                return res2;
+            };
+            NSMutableArray *allRes = [runChain() mutableCopy];
+            // 最高分 <5 且见过限流 → 60s 后整轮重搜一次(限流时低分多为残缺结果)
+            NSInteger topNow = -1;
+            for (NSDictionary *s in allRes)
+                topNow = MAX(topNow, ScoreSong(s, path.lastPathComponent, localMs));
+            if (topNow < 5 && chainLimited) {
+                printf("  [!] 见过限流且最高仅%ld分,休眠60s后整轮重搜\n", (long)topNow);
+                [NSThread sleepForTimeInterval:60];
+                allRes = [runChain() mutableCopy];
             }
             NSArray *res = allRes;
             if (!res.count) {
@@ -250,7 +271,10 @@ int main(int argc, char **argv) {
             for (NSDictionary *cand in ranked) {
                 if (tried >= 3) break;
                 NSInteger sc = [cand[@"score"] integerValue];
-                if (localMs > 0 && sc < 5) continue;   // 5分以下宁缺毋滥
+                if (localMs > 0 && sc < 5) {
+                    if (!rejectReason) rejectReason = @"信号不足";   // 5分以下宁缺毋滥
+                    continue;
+                }
                 NSDictionary *cs = cand[@"song"];
                 printf("  [*] 试 [%s] %s — %s (%ld分)\n",
                        [cs[@"sourceName"] UTF8String] ?: "?",
@@ -315,8 +339,6 @@ int main(int argc, char **argv) {
                 printf("  [!] 内嵌失败: %s\n", (ee ?: @"?").UTF8String);
                 [failed addObject:[base stringByAppendingString:@" | 内嵌失败"]];
             }
-            if (sleepSecs > 0 && fi + 1 < files.count)
-                [NSThread sleepForTimeInterval:sleepSecs];
         }
         printf("=== 完成: 成功 %d, 跳过 %d, 失败 %lu ===\n", done, skipped, (unsigned long)failed.count);
         for (NSString *f in failed) printf("  FAIL: %s\n", f.UTF8String);

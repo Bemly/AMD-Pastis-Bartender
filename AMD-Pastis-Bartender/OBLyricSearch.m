@@ -97,6 +97,12 @@ static NSCache *gMem;
                      timeout:20 error:&e];
     if (!d) { if (err) *err = e; return @[]; }
     NSDictionary *j = [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL];
+    // code 非 200(如 405 操作频繁)要把服务端原话带出来,别吞成"无结果"(限流退避就靠它识别)
+    if ([j[@"code"] longValue] != 200) {
+        if (err) *err = [NSString stringWithFormat:@"%@(%@)",
+                         j[@"msg"] ?: (j[@"message"] ?: @"拒绝"), j[@"code"] ?: @"?"];
+        return @[];
+    }
     NSArray *songs = j[@"result"][@"songs"];
     if (![songs isKindOfClass:[NSArray class]]) { if (err) *err = @"无结果"; return @[]; }
     NSMutableArray *out = [NSMutableArray array];
@@ -229,22 +235,31 @@ static NSCache *gMem;
     BOOL wantNE = !sources || [sources containsObject:@"ne"];
     BOOL wantQQ = !sources || [sources containsObject:@"qq"];
     NSMutableArray *out = [NSMutableArray array];
-    NSString *lastErr = nil;
+    NSString *lastErr = nil, *limitedErr = nil;
     if (wantNE) {
         NSString *e = nil;
         NSArray *r = [self searchNE:kw limit:limit error:&e];
         Logf(logf, @"[*] 网易云: %lu 条%@", (unsigned long)r.count, e ? [NSString stringWithFormat:@"(%@)", e] : @"");
         [out addObjectsFromArray:r];
-        if (e) lastErr = e;
+        if (e) {
+            lastErr = e;
+            if ([e containsString:@"操作频繁"] || [e containsString:@"HTTP"] ||
+                [e containsString:@"429"] || [e containsString:@"405"]) limitedErr = e;
+        }
     }
     if (wantQQ) {
         NSString *e = nil;
         NSArray *r = [self searchQQ:kw limit:limit error:&e];
         Logf(logf, @"[*] QQ音乐: %lu 条%@", (unsigned long)r.count, e ? [NSString stringWithFormat:@"(%@)", e] : @"");
         [out addObjectsFromArray:r];
-        if (e) lastErr = e;
+        if (e) {
+            lastErr = e;
+            if ([e containsString:@"操作频繁"] || [e containsString:@"HTTP"] ||
+                [e containsString:@"429"] || [e containsString:@"405"]) limitedErr = e;
+        }
     }
-    if (!out.count && err) *err = lastErr ?: @"两源均无结果";
+    // 合并 error 时限流优先(调用方退避就靠它识别;否则会被后跑的源覆盖)
+    if (!out.count && err) *err = limitedErr ?: lastErr ?: @"两源均无结果";
     return out;
 }
 
