@@ -168,9 +168,7 @@ int main(int argc, char **argv) {
             NSString *path = files[fi];
             NSString *base = [path.lastPathComponent stringByDeletingPathExtension];
             printf("[%lu/%lu] %s\n", fi + 1, (unsigned long)files.count, base.UTF8String);
-            // 间隔起手(放循环顶,所有 continue 路径都覆盖;失败风暴是上次限流的直接原因)
-            if (fi > 0 && sleepSecs > 0) [NSThread sleepForTimeInterval:sleepSecs];
-            // 已有词跳过(断点续传)
+            // 已有词跳过(断点续传;纯本地读，不占间隔)
             if (!force) {
                 NSData *probe = [[NSData alloc] initWithContentsOfFile:path];
                 NSString *e0 = nil;
@@ -182,6 +180,8 @@ int main(int argc, char **argv) {
                 }
             }
             // 查询链:全文件名 → 去括号曲名 → 曲名+艺人token;每轮后最高分≥10提前收
+            // 间隔只给网络活(跳过检查已过;失败 continue 照样覆盖——失败风暴是上次限流的直接原因)
+            if (fi > 0 && sleepSecs > 0) [NSThread sleepForTimeInterval:sleepSecs];
             void (^Log2)(NSString *) = ^(NSString *l){ Log(l); };
             NSString *titlePart = [[base componentsSeparatedByString:@" - "].lastObject ?: base
                                    stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
