@@ -60,10 +60,32 @@ static int ExpectedScript(NSString *filename) {
 
 static BOOL LyricPassesGate(NSString *lyric, int script) {
     if (script == 0) return YES;
+    // 先剥 credits/元信息行(作曲/编曲/by:/ti: 等),只看正文字符
+    static NSRegularExpression *prefixRe;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        prefixRe = [NSRegularExpression regularExpressionWithPattern:@"^(\\[[^\\]]*\\])+" options:0 error:NULL];
+    });
+    NSArray *credits = @[@"作曲", @"编曲", @"作詞", @"作词", @"編曲", @"by:", @"ti:", @"ar:", @"al:",
+                         @"offset", @"kana", @"length", @"hash", @"id:"];
+    NSMutableString *body = [NSMutableString string];
+    for (NSString *raw in [lyric componentsSeparatedByString:@"\n"]) {
+        NSString *t = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSTextCheckingResult *m = [prefixRe firstMatchInString:t options:0 range:NSMakeRange(0, t.length)];
+        NSString *text = m ? [t substringFromIndex:m.range.length] : t;
+        // 前缀后面常跟空格,不二次 trim 的话 hasPrefix 全跪(实测英文词 credits 行漏网即因此)
+        text = [text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSString *low = text.lowercaseString;
+        BOOL isCredit = NO;
+        for (NSString *c in credits) {
+            if ([low hasPrefix:c]) { isCredit = YES; break; }
+        }
+        if (!isCredit) [body appendString:text];
+    }
     long kana = 0, cjk = 0, hangul = 0;
-    NSUInteger n = lyric.length;
+    NSUInteger n = body.length;
     for (NSUInteger i = 0; i < n; i++) {
-        unichar c = [lyric characterAtIndex:i];
+        unichar c = [body characterAtIndex:i];
         if (c >= 0x3040 && c <= 0x30FF) kana++;
         else if (c >= 0x4E00 && c <= 0x9FFF) cjk++;
         else if (c >= 0xAC00 && c <= 0xD7AF) hangul++;
@@ -78,6 +100,80 @@ static BOOL LyricPassesGate(NSString *lyric, int script) {
 }
 
 static void Log(NSString *l) { printf("%s\n", l.UTF8String); }
+
+// 排版+内嵌+写后校验(搜索路径与映射路径共用);成功返回 YES
+static BOOL EmbedSong(NSString *path, NSString *base, NSDictionary *song, NSDictionary *ly,
+                      NSMutableArray<NSString *> *failed, int *done) {
+    printf("  [*] 选中 [%s] %s — %s\n", [song[@"sourceName"] UTF8String] ?: "?",
+           [song[@"name"] UTF8String] ?: "?", [song[@"singer"] UTF8String] ?: "?");
+    // 交错排版(原文+译文+音译,有则收)
+    OBLyricSource src = [song[@"source"] isEqualToString:@"qq"] ? OBLyricSourceQQ : OBLyricSourceGeneric;
+    NSArray *o = [OBLyric parseLRC:ly[@"lyric"] source:src ignoreEmpty:YES];
+    if (!o.count) {
+        printf("  [!] 原文为空\n");
+        [failed addObject:[base stringByAppendingString:@" | 原文为空"]];
+        return NO;
+    }
+    NSMutableArray *tracks = [NSMutableArray arrayWithObject:o];
+    for (NSString *k in @[@"trans", @"roma"]) {
+        NSString *t = ly[k];
+        if (![t isKindOfClass:[NSString class]] || !t.length) continue;
+        NSArray *p = [OBLyric parseLRC:t source:src ignoreEmpty:YES];
+        if (p.count) [tracks addObject:[OBLyric alignTrans:p toOrigin:o deviation:500
+                                                  lostRule:OBLyricLostEmpty]];
+    }
+    NSString *body = [OBLyric lrcString:[OBLyric renderStagger:tracks]];
+    NSMutableData *d = [[NSMutableData alloc] initWithContentsOfFile:path];
+    NSString *ee = nil;
+    uint32_t nl = d ? [OBMP4 applyLyrics:d lyrics:body error:&ee] : 0;
+    BOOL ok = nl > 0 && [d writeToFile:path atomically:YES];
+    NSString *back = ok ? [OBMP4 readLyrics:d error:NULL] : nil;
+    if (ok && [back isEqualToString:body]) {
+        printf("  [+] 内嵌 %lu字\n", (unsigned long)body.length);
+        (*done)++;
+        return YES;
+    }
+    printf("  [!] 内嵌失败: %s\n", (ee ?: @"?").UTF8String);
+    [failed addObject:[base stringByAppendingString:@" | 内嵌失败"]];
+    return NO;
+}
+
+// 映射文件:每行 "文件名.m4a | songId [ne|qq]" 或 "文件名.m4a | skip"(纯音乐备注跳过)
+// 返回 @{文件名: @{@"songId":..., @"source":...} 或 @{@"skip":@YES}}
+// 文件名比对做 NFC 归一化:macOS 盘上假名常是 NFD(分解形),手写映射多为 NFC,直接比必跪
+static NSString *NormName(NSString *s) { return s.precomposedStringWithCanonicalMapping ?: s; }
+static NSDictionary *LoadMap(NSString *mapPath) {
+    NSData *d = [[NSData alloc] initWithContentsOfFile:mapPath];
+    if (!d) return @{};
+    NSString *text = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding];
+    if (!text) return @{};
+    NSMutableDictionary *out = [NSMutableDictionary dictionary];
+    for (NSString *raw in [text componentsSeparatedByString:@"\n"]) {
+        NSString *line = [raw stringByTrimmingCharactersInSet:
+                          [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (!line.length || [line hasPrefix:@"#"]) continue;
+        NSArray *parts = [line componentsSeparatedByString:@"|"];
+        if (parts.count < 2) continue;
+        NSString *fn = [parts[0] stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceCharacterSet]];
+        NSString *vid = [parts[1] stringByTrimmingCharactersInSet:
+                         [NSCharacterSet whitespaceCharacterSet]];
+        if (!fn.length || !vid.length) continue;
+        if ([vid caseInsensitiveCompare:@"skip"] == NSOrderedSame) {
+            out[NormName(fn)] = @{ @"skip": @YES };
+            continue;
+        }
+        NSString *src = @"ne";
+        if (parts.count >= 3) {
+            NSString *s3 = [parts[2] stringByTrimmingCharactersInSet:
+                            [NSCharacterSet whitespaceCharacterSet]].lowercaseString;
+            if ([s3 isEqualToString:@"qq"]) src = @"qq";
+        }
+        out[NormName(fn)] = @{ @"songId": vid, @"source": src,
+                     @"sourceName": [src isEqualToString:@"qq"] ? @"QQ音乐" : @"网易云" };
+    }
+    return out;
+}
 
 // 去括号后缀的小写核心(比较曲名用)
 static NSString *CoreTitle(NSString *s) {
@@ -143,14 +239,21 @@ static NSInteger ScoreSong(NSDictionary *s, NSString *filename, long localMs) {
 
 int main(int argc, char **argv) {
     @autoreleasepool {
-        if (argc < 2) { printf("usage: lyricbatch <dir> [--force] [--sleep N]\n"); return 2; }
+        if (argc < 2) { printf("usage: lyricbatch <dir> [--force] [--sleep N] [--map file] [--only-map]\n"); return 2; }
         NSString *dir = @(argv[1]);
-        BOOL force = NO;
+        BOOL force = NO, onlyMap = NO;
         double sleepSecs = 2.0;
+        NSString *mapArg = nil;
         for (int i = 2; i < argc; i++) {
             if (!strcmp(argv[i], "--force")) force = YES;
+            else if (!strcmp(argv[i], "--only-map")) onlyMap = YES;
             else if (!strcmp(argv[i], "--sleep") && i + 1 < argc) sleepSecs = atof(argv[++i]);
+            else if (!strcmp(argv[i], "--map") && i + 1 < argc) mapArg = @(argv[++i]);
         }
+        // 映射:显式 --map 优先,否则目录下 lyric_ids.txt 有则自动用
+        NSString *mapPath = mapArg ?: [dir stringByAppendingPathComponent:@"lyric_ids.txt"];
+        NSDictionary *idMap = LoadMap(mapPath);
+        if (idMap.count) printf("[*] 映射 %lu 条 (%s)\n", (unsigned long)idMap.count, mapPath.UTF8String);
         NSFileManager *fm = [NSFileManager defaultManager];
         NSDirectoryEnumerator *en = [fm enumeratorAtPath:dir];
         NSMutableArray<NSString *> *files = [NSMutableArray array];
@@ -178,6 +281,35 @@ int main(int argc, char **argv) {
                     skipped++;
                     continue;
                 }
+            }
+            // 映射直取(绕过搜索+打分;语言门照守;--only-map 下非映射文件直接过)
+            NSDictionary *mapped = idMap[NormName(path.lastPathComponent)];
+            if (onlyMap && !mapped) continue;
+            if (mapped[@"skip"]) {
+                printf("  [=] 映射备注跳过(纯音乐)\n");
+                skipped++;
+                continue;
+            }
+            if (mapped) {
+                if (sleepSecs > 0) [NSThread sleepForTimeInterval:sleepSecs];
+                NSDictionary *song = @{ @"source": mapped[@"source"],
+                                        @"sourceName": mapped[@"sourceName"],
+                                        @"songId": mapped[@"songId"],
+                                        @"name": base, @"singer": @"", @"album": @"", @"duration": @0 };
+                NSString *le = nil;
+                NSDictionary *ly = [OBLyricSearch lyricFor:song logf:^(NSString *l){ Log(l); } error:&le];
+                if (!ly) {
+                    printf("  [!] 取词失败: %s\n", (le ?: @"?").UTF8String);
+                    [failed addObject:[base stringByAppendingString:@" | 取词失败"]];
+                    continue;
+                }
+                if (!LyricPassesGate(ly[@"lyric"] ?: @"", ExpectedScript(base))) {
+                    printf("  [!] 语言不符(映射 ID 请核对)\n");
+                    [failed addObject:[base stringByAppendingString:@" | 语言不符"]];
+                    continue;
+                }
+                EmbedSong(path, base, song, ly, failed, &done);
+                continue;
             }
             // 查询链:全文件名 → 去括号曲名 → 曲名+艺人token;每轮后最高分≥10提前收
             // 间隔只给网络活(跳过检查已过;失败 continue 照样覆盖——失败风暴是上次限流的直接原因)
@@ -308,37 +440,7 @@ int main(int argc, char **argv) {
                     continue;
                 }
             }
-            printf("  [*] 选中 [%s] %s — %s\n", [song[@"sourceName"] UTF8String],
-                   [song[@"name"] UTF8String] ?: "?", [song[@"singer"] UTF8String] ?: "?");
-            // 交错排版(原文+译文+音译,有则收)
-            OBLyricSource src = [song[@"source"] isEqualToString:@"qq"] ? OBLyricSourceQQ : OBLyricSourceGeneric;
-            NSArray *o = [OBLyric parseLRC:ly[@"lyric"] source:src ignoreEmpty:YES];
-            if (!o.count) {
-                printf("  [!] 原文为空\n");
-                [failed addObject:[base stringByAppendingString:@" | 原文为空"]];
-                continue;
-            }
-            NSMutableArray *tracks = [NSMutableArray arrayWithObject:o];
-            for (NSString *k in @[@"trans", @"roma"]) {
-                NSString *t = ly[k];
-                if (![t isKindOfClass:[NSString class]] || !t.length) continue;
-                NSArray *p = [OBLyric parseLRC:t source:src ignoreEmpty:YES];
-                if (p.count) [tracks addObject:[OBLyric alignTrans:p toOrigin:o deviation:500
-                                                          lostRule:OBLyricLostEmpty]];
-            }
-            NSString *body = [OBLyric lrcString:[OBLyric renderStagger:tracks]];
-            NSMutableData *d = [[NSMutableData alloc] initWithContentsOfFile:path];
-            NSString *ee = nil;
-            uint32_t nl = d ? [OBMP4 applyLyrics:d lyrics:body error:&ee] : 0;
-            BOOL ok = nl > 0 && [d writeToFile:path atomically:YES];
-            NSString *back = ok ? [OBMP4 readLyrics:d error:NULL] : nil;
-            if (ok && [back isEqualToString:body]) {
-                printf("  [+] 内嵌 %lu字\n", (unsigned long)body.length);
-                done++;
-            } else {
-                printf("  [!] 内嵌失败: %s\n", (ee ?: @"?").UTF8String);
-                [failed addObject:[base stringByAppendingString:@" | 内嵌失败"]];
-            }
+            EmbedSong(path, base, song, ly, failed, &done);
         }
         printf("=== 完成: 成功 %d, 跳过 %d, 失败 %lu ===\n", done, skipped, (unsigned long)failed.count);
         for (NSString *f in failed) printf("  FAIL: %s\n", f.UTF8String);
