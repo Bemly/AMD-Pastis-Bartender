@@ -954,6 +954,8 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     [[_logV textContainer] setWidthTracksTextView:YES];
     _logV.editable = NO;
     _logV.drawsBackground = NO;   // 透出玻璃,不做黑板
+    _logV.textColor = [NSColor whiteColor];   // 固定深色模式,黑色字看不见
+    _logV.insertionPointColor = [NSColor whiteColor];
     _logV.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
     ls.documentView = _logV;
     [page addArrangedSubview:ls];
@@ -1060,7 +1062,11 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSTextStorage *st = self->_logV.textStorage;
         if (!st) return;
-        [st appendAttributedString:[[NSAttributedString alloc] initWithString:s]];
+        // 日志字色固定白色(见建页处注释)
+        NSFont *f = self->_logV.font ?: [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+        NSDictionary *at = @{NSForegroundColorAttributeName: [NSColor whiteColor],
+                             NSFontAttributeName: f};
+        [st appendAttributedString:[[NSAttributedString alloc] initWithString:s attributes:at]];
         // 上限:保留最后约 6000 行
         if (st.string.length > 600000) {
             [st deleteCharactersInRange:NSMakeRange(0, st.string.length - 600000)];
