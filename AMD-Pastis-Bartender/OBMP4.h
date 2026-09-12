@@ -78,6 +78,10 @@ typedef struct { OBBox *v; int n; } OBBoxList;
 // 读内嵌歌词(©lyr 文本原子,UTF-8);无则 nil。只读不改。
 + (nullable NSString *)readLyrics:(NSData *)d error:(NSString * _Nullable * _Nullable)err;
 
+// 读时长(秒):只读文件头,解析顶层容器内时长头的时间刻度与长度;失败 -1。
+// 自家引擎产物容器在前,第三方尾置容器的文件读不到头则回 -1(调用方显示占位)。
++ (double)fileDuration:(NSString *)path;
+
 @end
 
 NS_ASSUME_NONNULL_END

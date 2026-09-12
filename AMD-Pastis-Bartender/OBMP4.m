@@ -806,4 +806,143 @@ static uint32_t spliceNewUdta(NSMutableData *d, NSData *il) {
     return out;
 }
 
+// 文件头时长:顶层容器 → 时长头,取 timescale/duration。只读前 512KB。
+// 自家引擎产物是分片文件,头里时长为 0,此时退到全文件 trun 包数累加
+// (× 配置盒内一包样本数 ÷ 时间刻度;结果按 路径+大小+mtime 缓存,预览刷新只扫新增/变化文件)。
++ (double)fileDuration:(NSString *)path {
+    if (!path.length) return -1;
+    static NSMutableDictionary *cache;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ cache = [NSMutableDictionary dictionary]; });
+    NSDictionary *at = [[NSFileManager defaultManager] attributesOfItemAtPath:path error:NULL];
+    unsigned long long fsize = [at fileSize];
+    NSDate *mt = [at fileModificationDate];
+    if (!fsize) return -1;
+    NSString *ck = [NSString stringWithFormat:@"%@|%llu|%@", path, fsize, mt ?: @""];
+    @synchronized (cache) {
+        NSNumber *hit = cache[ck];
+        if (hit) return hit.doubleValue;
+    }
+    double sec = -1;
+    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
+    NSData *head = nil;
+    @try { head = [fh readDataOfLength:524288]; } @catch (NSException *e) {}
+    @try { [fh closeFile]; } @catch (NSException *e) {}
+    uint64_t timescale = 0;
+    uint32_t frameLen = 0;   // 音频一包样本数(从编码配置盒读,本引擎产物为 4096)
+    if (head.length >= 32) {
+        const uint8_t *b = head.bytes;
+        uint32_t len = (uint32_t)head.length;
+        OBBoxList top; [self parsePlain:b len:len from:0 to:len out:&top];
+        for (int i = 0; i < top.n; i++) {
+            if (top.v[i].type != FCC4('m','o','o','v')) continue;
+            uint32_t mo = top.v[i].off, me = mo + top.v[i].size;
+            if (me > len) me = len;
+            OBBoxList kids; [self parsePlain:b len:len from:mo + 8 to:me out:&kids];
+            for (int j = 0; j < kids.n; j++) {
+                uint32_t t = kids.v[j].type, o = kids.v[j].off, ie = o + kids.v[j].size;
+                if (ie > len) continue;
+                if (t == FCC4('m','v','h','d') && sec < 0 && o + 28 <= len) {
+                    uint8_t ver = b[o + 8];
+                    uint64_t ts = 0, du = 0;
+                    if (ver == 0 && o + 28 <= len) {
+                        ts = ((uint64_t)b[o+20] << 24) | ((uint64_t)b[o+21] << 16) |
+                             ((uint64_t)b[o+22] << 8) | b[o+23];
+                        du = ((uint64_t)b[o+24] << 24) | ((uint64_t)b[o+25] << 16) |
+                             ((uint64_t)b[o+26] << 8) | b[o+27];
+                    } else if (ver == 1 && o + 36 <= len) {
+                        ts = ((uint64_t)b[o+24] << 24) | ((uint64_t)b[o+25] << 16) |
+                             ((uint64_t)b[o+26] << 8) | b[o+27];
+                        du = ((uint64_t)b[o+28] << 56) | ((uint64_t)b[o+29] << 48) |
+                             ((uint64_t)b[o+30] << 40) | ((uint64_t)b[o+31] << 32) |
+                             ((uint64_t)b[o+32] << 24) | ((uint64_t)b[o+33] << 16) |
+                             ((uint64_t)b[o+34] << 8) | b[o+35];
+                    }
+                    if (ts > 0) timescale = ts;
+                    // 全 1 表"未知/直播"时长,不算数
+                    if (ts > 0 && du > 0 && du != UINT32_MAX && du != UINT64_MAX)
+                        sec = (double)du / (double)ts;
+                } else if (t == FCC4('t','r','a','k') && !timescale) {
+                    // 取首个媒体头的时间刻度(分片文件时长另算,只借刻度)
+                    uint32_t te = ie;
+                    OBBoxList tr; [self parsePlain:b len:len from:o + 8 to:te out:&tr];
+                    for (int a = 0; a < tr.n && !timescale; a++) {
+                        if (tr.v[a].type != FCC4('m','d','i','a')) continue;
+                        uint32_t de = tr.v[a].off + tr.v[a].size;
+                        if (de > len) de = len;
+                        OBBoxList md; [self parsePlain:b len:len from:tr.v[a].off + 8 to:de out:&md];
+                        for (int c = 0; c < md.n; c++) {
+                            if (md.v[c].type != FCC4('m','d','h','d')) continue;
+                            uint32_t ho = md.v[c].off;
+                            if (ho + 28 > len) break;
+                            uint8_t ver = b[ho + 8];
+                            uint64_t ts = (ver == 0) ?
+                                (((uint64_t)b[ho+20] << 24) | ((uint64_t)b[ho+21] << 16) |
+                                 ((uint64_t)b[ho+22] << 8) | b[ho+23]) :
+                                (((uint64_t)b[ho+24] << 24) | ((uint64_t)b[ho+25] << 16) |
+                                 ((uint64_t)b[ho+26] << 8) | b[ho+27]);
+                            if (ts > 0) timescale = ts;
+                            break;
+                        }
+                        [self freeList:&md];
+                    }
+                    [self freeList:&tr];
+                }
+            }
+            [self freeList:&kids];
+        }
+        [self freeList:&top];
+        // 编码配置小盒(尺寸固定 36B):其后 12B 处即一包样本数
+        for (uint32_t p = 0; p + 16 <= len && !frameLen; p++) {
+            if (b[p] == 0 && b[p+1] == 0 && b[p+2] == 0 && b[p+3] == 36 &&
+                b[p+4] == 'a' && b[p+5] == 'l' && b[p+6] == 'a' && b[p+7] == 'c') {
+                uint32_t fl = ((uint32_t)b[p+12] << 24) | ((uint32_t)b[p+13] << 16) |
+                              ((uint32_t)b[p+14] << 8) | b[p+15];
+                if (fl > 0 && fl <= 16384) frameLen = fl;
+            }
+        }
+    }
+    // 头时长为 0(分片产物常态):全文件累加各 trun 包数 × 一包样本数 ÷ 时间刻度
+    if (sec < 0 && timescale > 0 && frameLen > 0 && fsize < 512 * 1024 * 1024) {
+        NSData *all = [NSData dataWithContentsOfFile:path];
+        if (all.length == fsize) {
+            const uint8_t *b = all.bytes;
+            uint32_t len = (uint32_t)all.length;
+            OBBoxList top; [self parsePlain:b len:len from:0 to:len out:&top];
+            uint64_t total = 0;
+            for (int i = 0; i < top.n; i++) {
+                if (top.v[i].type != FCC4('m','o','o','f')) continue;
+                uint32_t me = top.v[i].off + top.v[i].size;
+                if (me > len) me = len;
+                OBBoxList trafs; [self parsePlain:b len:len from:top.v[i].off + 8 to:me out:&trafs];
+                for (int k = 0; k < trafs.n; k++) {
+                    uint32_t tt = trafs.v[k].type;
+                    uint32_t to = trafs.v[k].off, te = to + trafs.v[k].size;
+                    if (te > len) te = len;
+                    if (tt == FCC4('t','r','a','f')) {
+                        OBBoxList items; [self parsePlain:b len:len from:to + 8 to:te out:&items];
+                        for (int q = 0; q < items.n; q++) {
+                            if (items.v[q].type != FCC4('t','r','u','n')) continue;
+                            uint32_t ro = items.v[q].off;
+                            // v0/v1 布局相同:版本标志 4B 后即样本数
+                            if (ro + 16 <= len)
+                                total += ((uint64_t)b[ro+12] << 24) | ((uint64_t)b[ro+13] << 16) |
+                                         ((uint64_t)b[ro+14] << 8) | b[ro+15];
+                        }
+                        [self freeList:&items];
+                    }
+                }
+                [self freeList:&trafs];
+            }
+            [self freeList:&top];
+            if (total > 0) sec = (double)total * (double)frameLen / (double)timescale;
+        }
+    }
+    @synchronized (cache) {
+        if (cache.count > 2000) [cache removeAllObjects];
+        cache[ck] = @(sec);
+    }
+    return sec;
+}
+
 @end

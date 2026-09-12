@@ -835,7 +835,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 /// 主操作 → 工具栏「刷新列表」;双击行把文件名填进歌词页(单曲模式)并跳过去。
 - (NSView *)buildPreviewPage {
     NSStackView *page = [self pageStack];
-    _pvTable = [self contentTable:@[@[@"文件名", @260], @[@"艺人", @150], @[@"曲名", @180], @[@"大小", @80]]
+    _pvTable = [self contentTable:@[@[@"文件名", @220], @[@"艺人", @130], @[@"曲名", @160], @[@"时长", @64], @[@"大小", @80]]
                            action:@selector(fillFromPreview:)];
     NSScrollView *ts = [self tableScroll:_pvTable];
     _pvHintL = [NSTextField labelWithString:@""];
@@ -1059,6 +1059,9 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 
 - (void)appendLog:(NSString *)s {
     if (!s.length || !_logV) return;
+    // 面板行同步镜像落盘:下次贴面板日志时直接看文件尾,不用复述操作
+    // (debug 开关无关;下载进度等 logf 行只走面板,不走 AMDDBG)
+    AMDDBGWriteFile(s);
     dispatch_async(dispatch_get_main_queue(), ^{
         NSTextStorage *st = self->_logV.textStorage;
         if (!st) return;
@@ -1472,9 +1475,16 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
             NSString *sizeText = sz > 1048576 ?
                 [NSString stringWithFormat:@"%.1fMB", sz / 1048576.0] :
                 [NSString stringWithFormat:@"%.0fKB", sz / 1024.0];
+            // 时长只读文件头(容器在前才有;尾置容器回占位,不起 ffprobe 子进程)
+            double sec = [OBMP4 fileDuration:full];
+            NSString *durText = @"--";
+            if (sec >= 0) {
+                long s = lround(sec);
+                durText = [NSString stringWithFormat:@"%ld:%02ld", s / 60, s % 60];
+            }
             [items addObject:@{ @"file": full, @"name": base,
                                 @"artist": artist ?: @"?", @"title": title ?: base,
-                                @"sizeText": sizeText }];
+                                @"durText": durText, @"sizeText": sizeText }];
         }
         dispatch_async(dispatch_get_main_queue(), ^{
             [self->_pvItems removeAllObjects];
