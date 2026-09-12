@@ -1231,8 +1231,9 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         // SplashActivity 为 recents 实锤的入口 cmp(docs/08 用 deep-link,此处直接拉起主入口)
         NSString *cmd = [NSString stringWithFormat:@"am start -n %@/.onboarding.activities.SplashActivity", OB_PHONE_PKG];
         NSString *out = [self runAdbSync:@[@"shell", cmd] status:&st];
+        NSString *trimmed = [[out ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] copy];
         NSString *msg = [NSString stringWithFormat:@"[设备] am start (exit=%d): %@\n", st,
-                         [[out stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] substringToIndex:MIN(300, out.length)]];
+                         [trimmed substringToIndex:MIN(300, trimmed.length)]];
         [self appendLog:msg];
     });
 }
