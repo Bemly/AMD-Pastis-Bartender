@@ -1342,20 +1342,25 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         NSString *title = parts.count > 0 ? parts[0] : desc;
         NSString *artist = parts.count > 1 ? parts[1] : @"";
         NSString *album = parts.count > 2 ? [[parts subarrayWithRange:NSMakeRange(2, parts.count - 2)] componentsJoinedByString:@", "] : @"";
+        NSString *keyword = artist.length ? [NSString stringWithFormat:@"%@ %@", title, artist] : title;
         dispatch_async(dispatch_get_main_queue(), ^{
+            // 懒构建页面可能还没建过,先确保搜索框存在再填(否则 _keywordF 为 nil,填了也白填)
+            if (!self->_keywordF) self->_pages[@(2)] = [self buildPage:2];
+            self->_keywordF.stringValue = keyword;
             self->_nowPlayingL.stringValue = [NSString stringWithFormat:@"%@ — %@ [%@] (%@)", title, artist, album, state];
         });
-        [self appendLog:[NSString stringWithFormat:@"[播放] %@ — %@ | 反查 adamId 中…\n", title, artist]];
+        [self appendLog:[NSString stringWithFormat:@"[播放] %@ — %@ | 已填入搜索框,反查 adamId 中…\n", title, artist]];
         // 曲库反查(后台)
         NSString *best = nil;
         NSNumber *adam = [AMDSearch resolveAdamIdForTitle:title artist:artist
                                                countries:AllCountries() bestTitle:&best];
         dispatch_async(dispatch_get_main_queue(), ^{
+            if (!self->_adamF) self->_pages[@(3)] = [self buildPage:3];
             if (adam) {
                 self->_adamF.stringValue = [adam stringValue];
                 [self appendLog:[NSString stringWithFormat:@"[播放] 命中 adamId=%@ (%@),已填入下载页\n", adam, best]];
             } else {
-                [self appendLog:@"[播放] 曲库五区均未命中,请到「搜索」页手动搜\n"];
+                [self appendLog:@"[播放] 曲库五区均未命中,关键词已在搜索页,请手动搜\n"];
             }
         });
     });
