@@ -405,15 +405,48 @@ static const NSUInteger kTcpBatchCap = 8000000;
     NSString *cache = [NSString stringWithFormat:@"/data/data/%@/cache/playback_assets/hls", OB_PHONE_PKG];
     NSString *assetPath = MetaPath(cache, [NSString stringWithFormat:@"%@/asset", adam]);
     NSString *keyPath = MetaPath(cache, [NSString stringWithFormat:@"%@/persistentKey", adam]);
+    // 本地完整缓存探针:在播/播过的曲目走缓存文件,不经过流预取,此时 playback_assets
+    // 永远不落盘(2026-09-12 实录:播着 Sincerely 也无其目录,文件在 no_backup 缓存)。
+    // 有缓存则直接转缓存直解,不花 45s 空等;轮询失败后再复查一次(等待期间可能切歌)。
+    NSString *c2 = [NSString stringWithFormat:@"/data/data/%@/no_backup/assets/hls", OB_PHONE_PKG];
+    NSString *dlMetaPath = MetaPath(c2, [NSString stringWithFormat:@"%@/download", adam]);
     if (![OBADB suCat:assetPath] || ![OBADB suCat:keyPath]) {
+        if ([OBADB suCat:dlMetaPath]) {
+            [self logf:logf fmt:@"[*] 本地有完整缓存,转缓存直解(免流预取)…"];
+            return [self runFromCache:adam outDir:dir force:force logf:logf cancel:cancelFlag error:err];
+        }
         [self logf:logf fmt:@"[*] 磁盘无 asset/key,深链触发预取…"];
         [OBADB deeplinkSong:adam];
-        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:45];
+        // 现版本看歌页不预取,只有真实播放才租 key(2026-09-12 实录:60s 空等)。
+        // 15s 无果则补一次媒体键播起目标页;PLAYING 别国歌曲时绝不按键(会暂停用户音乐),
+        // 非目标 App 会话时也不按(纪律:126 会打醒任意前台媒体)。
+        NSDate *t0b = [NSDate date];
+        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:75];
+        BOOL triedPlay = NO;
         while (![OBADB suCat:assetPath] || ![OBADB suCat:keyPath]) {
             if (*cancelFlag) { if (err) *err = @"已取消"; return nil; }
             if ([deadline timeIntervalSinceNow] <= 0) {
+                if ([OBADB suCat:dlMetaPath]) {
+                    [self logf:logf fmt:@"[*] 预取未落盘但本地有缓存,转缓存直解…"];
+                    return [self runFromCache:adam outDir:dir force:force logf:logf cancel:cancelFlag error:err];
+                }
                 if (err) *err = @"key/asset 未落盘(试在手机上播放一次)";
                 return nil;
+            }
+            if (!triedPlay && [[NSDate date] timeIntervalSinceDate:t0b] >= 15) {
+                triedPlay = YES;
+                NSString *fpkg = [self frontMediaPackage];
+                if (![fpkg isEqualToString:OB_PHONE_PKG]) {
+                    [self logf:logf fmt:@"[!] 前台媒体非目标 App,不自动播(手动播一次目标曲)"];
+                } else {
+                    NSString *st = [self targetSessionState];
+                    if ([st isEqualToString:@"PLAYING"]) {
+                        [self logf:logf fmt:@"[!] 手机正在播别的歌,不断流;切到目标曲播一次即下"];
+                    } else {
+                        [OBADB mediaKeyPlay];
+                        [self logf:logf fmt:@"[*] 已补播放键(目标页开播),等预取落盘…"];
+                    }
+                }
             }
             [NSThread sleepForTimeInterval:3];
         }
@@ -1123,8 +1156,7 @@ static const NSUInteger kTcpBatchCap = 8000000;
 }
 
 // 当前前台媒体会话包名(发媒体键前必查;不是目标 App 就返回 nil)
-+ (NSString *)frontMediaPackage {
-    NSString *s = [OBADB shellRetry:@[@"shell", @"dumpsys media_session"] timeout:20 error:nil];
++ (NSString *)frontMediaPackage {    NSString *s = [OBADB shellRetry:@[@"shell", @"dumpsys media_session"] timeout:20 error:nil];
     if (![s length]) return nil;
     __block NSString *pkg = nil;
     [[s componentsSeparatedByString:@"\n"] enumerateObjectsUsingBlock:^(NSString *ln, NSUInteger i, BOOL *stop) {
@@ -1137,6 +1169,20 @@ static const NSUInteger kTcpBatchCap = 8000000;
         }
     }];
     return pkg;
+}
+
+// 目标 App 媒体会话状态(PLAYING/PAUSED…);无会话 nil(与设备页正在播放同口径)
++ (NSString *)targetSessionState {
+    NSString *s = [OBADB shellRetry:@[@"shell", @"dumpsys media_session"] timeout:20 error:nil];
+    if (!s.length) return nil;
+    NSRange pr = [s rangeOfString:OB_PHONE_PKG];
+    if (pr.location == NSNotFound) return nil;
+    NSString *scope = [s substringFromIndex:pr.location];
+    if (scope.length > 6000) scope = [scope substringToIndex:6000];
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"state=PlaybackState \\{state=(\\w+)" options:0 error:NULL];
+    NSTextCheckingResult *m = [re firstMatchInString:scope options:0 range:NSMakeRange(0, scope.length)];
+    if (m && m.numberOfRanges >= 2) return [scope substringWithRange:[m rangeAtIndex:1]];
+    return nil;
 }
 
 // sidecar 是否记录了一次绿色验证(断点续传依据;.m4a 被移走只剩 sidecar 也算已收)
