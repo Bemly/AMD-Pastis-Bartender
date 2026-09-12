@@ -73,6 +73,7 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     NSTask *t = [[NSTask alloc] init];
     t.launchPath = @"/bin/zsh";
     t.arguments = @[@"-lc", @"which adb"];
+    t.standardInput = [NSFileHandle fileHandleWithNullDevice];  // 防 EXC_GUARD DUP fd 0(见 TaskRunner)
     NSPipe *p = [NSPipe pipe];
     t.standardOutput = p;
     @try {

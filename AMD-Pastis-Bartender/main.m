@@ -3,7 +3,10 @@
 #import "AMDDebug.h"
 
 static void AMDUncaughtHandler(NSException *e) {
-    AMDDBG(@"UNCAUGHT EXCEPTION %@: %@\n%@", e.name, e.reason, e.callStackSymbols);
+    NSString *line = [NSString stringWithFormat:@"[DBG %010.3f] UNCAUGHT EXCEPTION %@: %@\n%@\n",
+                      [NSProcessInfo processInfo].systemUptime, e.name, e.reason, e.callStackSymbols];
+    NSLog(@"%@", line);
+    AMDDBGWriteFileSync(line);   // 无条件落盘:debug 未开也要留案底
 }
 
 int main(int argc, const char * argv[]) {

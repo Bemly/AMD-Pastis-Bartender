@@ -42,6 +42,10 @@
     _task.arguments = _args;
     if (_cwd.length > 0) _task.currentDirectoryPath = _cwd;
     _task.environment = [self mergedEnv];
+    // 子进程 stdin 必须显式给 /dev/null:经 open/launchd 启动时父进程 fd0 被 guard,
+    // NSTask 默认继承 stdin 会在 launchWithDictionary 里 dup(fd0) 直接 EXC_GUARD 打死进程
+    // (2026-09-12 实录:下载/正在播放的 runSync 崩于 dup → EXC_GUARD DUP fd 0)。
+    _task.standardInput = [NSFileHandle fileHandleWithNullDevice];
     NSPipe *pipe = [NSPipe pipe];
     _task.standardOutput = pipe;
     _task.standardError = pipe;
@@ -111,6 +115,7 @@
     e[@"PYTHONUNBUFFERED"] = @"1";
     for (NSString *k in extraEnv) e[k] = extraEnv[k];
     t.environment = e;
+    t.standardInput = [NSFileHandle fileHandleWithNullDevice];  // 同上,防 EXC_GUARD DUP fd 0
     NSPipe *pipe = [NSPipe pipe];
     t.standardOutput = pipe;
     t.standardError = pipe;
