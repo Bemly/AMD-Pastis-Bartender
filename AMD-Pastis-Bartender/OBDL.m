@@ -292,6 +292,63 @@ static const NSUInteger kTcpBatchCap = 8000000;
     return all;
 }
 
+#pragma mark - 手机直出组装(手机端 mpbuild;传输零 base64:整曲/成品/清洗后 init 全走 push/pull 原始字节)
+
+// 手机端全量解密+组装:入参 path 为手机本地整曲 fMP4(缓存资产原位或 Mac 推送),
+// initPath 为 Mac 预先 push 的清洗后 init 小文件;成品写到手机 out,由调用方 pull 回来。
+// 返回应答 payload(frags/samples/blocks/size)。
++ (nullable NSDictionary *)phoneBuild:(OBLink *)link
+                                 path:(NSString *)phonePath
+                                  out:(NSString *)phoneOut
+                             initPath:(NSString *)initPath
+                              initLen:(uint32_t)initLen
+                              constIv:(NSString *)ivB64
+                               ivSize:(unsigned)ivSize
+                              segKeys:(NSArray<NSString *> *)segKeys
+                             trackKey:(NSString *)trackKey
+                                pfKey:(NSString *)pfKey
+                                 logf:(void (^)(NSString *))f
+                                 error:(NSString * _Nullable * _Nullable)err {
+    NSUInteger np = 0;
+    for (NSString *k in segKeys) if ([k isEqualToString:@"p"]) np++;
+    [self logf:f fmt:@"[*] 手机直出: %lu 碎片(预取键 %lu)",
+         (unsigned long)segKeys.count, (unsigned long)np];
+    NSString *resp = [link rpc:@"mpbuild"
+                          args:@{ @"path": phonePath, @"out": phoneOut,
+                                  @"initPath": initPath, @"initLen": @(initLen),
+                                  @"ivB64": ivB64, @"ivSize": @(ivSize),
+                                  @"segKeys": segKeys ?: @[],
+                                  @"keyT": trackKey, @"keyP": pfKey ?: @"" }
+                         data:nil timeout:900 error:nil];
+    if (!resp) { if (err) *err = @"手机直出 RPC 超时/断线"; return nil; }
+    NSDictionary *root = [NSJSONSerialization JSONObjectWithData:[resp dataUsingEncoding:NSUTF8StringEncoding]
+                                                         options:0 error:NULL];
+    NSDictionary *p = root[@"payload"];
+    if (![p isKindOfClass:[NSDictionary class]] || ![p[@"ok"] boolValue]) {
+        if (err) *err = [NSString stringWithFormat:@"手机直出失败: %@",
+                         [p isKindOfClass:[NSDictionary class]] ? (p[@"error"] ?: @"?") : @"应答异常"];
+        return nil;
+    }
+    return p;
+}
+
+// 取消:对在跑的手机直出发中止旗标(碎片间隙退出);无连接/未在跑时空转无害
++ (void)abortPhoneBuild {
+    OBLink *link = [OBLink shared];
+    if (!link.isConnected) return;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        [link rpc:@"mpabort" args:nil data:nil timeout:5 error:nil];
+    });
+}
+
+// 手机侧临时文件清理(整曲推送件/半成品/拉走后的成品)
++ (void)phoneCleanup:(NSArray<NSString *> *)paths {
+    if (!paths.count) return;
+    [OBADB shellRetry:@[@"shell",
+        [NSString stringWithFormat:@"su -c 'rm -f %@'", [paths componentsJoinedByString:@" "]]]
+        timeout:20 error:nil];
+}
+
 #pragma mark - 单碎片处理
 
 // 返回 nil=成功;非 nil=错误信息
@@ -433,8 +490,10 @@ static const NSUInteger kTcpBatchCap = 8000000;
                             cancel:(volatile BOOL *)cancelFlag
                              error:(NSString * _Nullable * _Nullable)err {
     NSTimeInterval t0 = [NSDate date].timeIntervalSince1970;
-    [self logf:logf fmt:@"=== adam %@ 原生下载开始 ===", adam];
-    MDPDual *dual = nil; // 直传双链(探针通过后按配置建,失败回退引擎通道)
+    [self logf:logf fmt:@"=== adam %@ 原生下载开始(%@) ===", adam,
+         [[AMDConfig shared].mergeMode isEqualToString:@"phone"] ? @"手机官方直出" : @"本机合并"];
+    MDPDual *dual = nil; // 直传双链(探针通过后按配置建,失败回退引擎通道;手机直出不建)
+    BOOL phoneMerge = [[AMDConfig shared].mergeMode isEqualToString:@"phone"];
 
     // ---- 0) 磁盘元数据就位(缺则深链触发预取,3s 轮询) ----
     NSString *cache = [NSString stringWithFormat:@"/data/data/%@/cache/playback_assets/hls", OB_PHONE_PKG];
@@ -585,8 +644,8 @@ static const NSUInteger kTcpBatchCap = 8000000;
     [self logf:logf fmt:@"[*] key 预检通过 track=%luB prefetch=%luB",
          (unsigned long)trackUse.length, (unsigned long)pfUse.length];
 
-    // ---- 3.6) 直传建链(失败不拦路,回退引擎通道) ----
-    dual = [self buildDual:link logf:logf];
+    // ---- 3.6) 直传建链(手机直出不需要:组装走引擎 RPC;失败不拦路,回退引擎通道) ----
+    if (!phoneMerge) dual = [self buildDual:link logf:logf];
 
     // ---- 4) key 方案(播放列表 ↔ 磁盘元数据自洽,防错资产) ----
     NSString *prefetchPart = @"p000000000/s1/e1";
@@ -623,49 +682,122 @@ static const NSUInteger kTcpBatchCap = 8000000;
     NSString *constIv = [[NSData dataWithBytes:prots[0].constIv length:ivLen]
         base64EncodedStringWithOptions:0];
 
-    // ---- 6) 逐碎片:拆样本 → 批量解密(≤1.5MB/包) → 回拼 → 重建 ----
-    NSMutableData *result = [[OBMP4 cleanInit:fileBuf initEnd:initEnd dedupe:NO] mutableCopy];
-    uint32_t fragOff = initEnd, fragIdx = 0, totalSamples = 0, totalBlocks = 0;
-    uint32_t *sOff = malloc(8192 * 4), *sSize = malloc(8192 * 4);
-    unsigned *sSubN = malloc(8192 * 4), *sSubOff = malloc(8192 * 4);
-    uint32_t *subBuf = malloc(8192 * 2 * 4);
-    uint32_t *spliceBuf = malloc(512 * 2 * 4);
-    BOOL bufsOk = sOff && sSize && sSubN && sSubOff && subBuf && spliceBuf;
-    if (!bufsOk) { [self endLink:link dual:dual]; if (err) *err = @"内存不足"; return nil; }
+    // ---- 6) 成品组装:本机合并(逐碎片)或手机官方直出(mpbuild) ----
+    NSMutableData *cleanedInit = [OBMP4 cleanInit:fileBuf initEnd:initEnd dedupe:NO];
+    NSMutableData *result = nil;
+    uint32_t fragIdx = 0, totalBlocks = 0;
+    unsigned expectSamples = 0;
+    if (phoneMerge) {
+        // ---- 6P) 手机直出:推整曲 → 手机端官方解密器全量解密+组装 → 拉成品 ----
+        NSMutableArray *segKeys = [NSMutableArray arrayWithCapacity:segments.count];
+        for (NSDictionary *seg in segments) {
+            NSString *ku = [OBPlaylist normKeyUri:(seg[@"key"] == [NSNull null] || !seg[@"key"]) ? nil : seg[@"key"]];
+            if (!ku.length) ku = prefetchPart;
+            [segKeys addObject:([ku containsString:prefetchPart] ? @"p" : @"t")];
+        }
+        NSString *initLocal = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                               [NSString stringWithFormat:@"amd_ic_%@.bin", adam]];
+        [cleanedInit writeToFile:initLocal atomically:YES];
+        NSString *initRemote = [NSString stringWithFormat:@"/data/local/tmp/.amd_ic_%@", adam];
+        NSString *pushLocal = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                               [NSString stringWithFormat:@"amd_push_%@.fmp4", adam]];
+        [fileData writeToFile:pushLocal atomically:YES];
+        NSString *pushRemote = [NSString stringWithFormat:@"/data/local/tmp/.amd_mp_%@", adam];
+        NSString *phoneOut = [NSString stringWithFormat:@"/data/data/%@/cache/obout_%@.m4a", OB_PHONE_PKG, adam];
+        NSString *perr = nil;
+        BOOL pushed = [OBADB push:initLocal to:initRemote error:&perr] &&
+                      [OBADB push:pushLocal to:pushRemote error:&perr];
+        [[NSFileManager defaultManager] removeItemAtPath:initLocal error:NULL];
+        [[NSFileManager defaultManager] removeItemAtPath:pushLocal error:NULL];
+        if (pushed)
+            [OBADB shellRetry:@[@"shell",
+                [NSString stringWithFormat:@"su -c 'chmod 644 %@ %@'", initRemote, pushRemote]]
+                     timeout:20 error:nil];
+        if (!pushed) {
+            [self phoneCleanup:@[initRemote, pushRemote]];
+            [self endLink:link dual:dual];
+            if (err) *err = [NSString stringWithFormat:@"整曲推送失败: %@", perr ?: @"?"];
+            return nil;
+        }
+        [self logf:logf fmt:@"[*] 整曲已推送(%lu 字节),手机端组装中…", (unsigned long)fileLen];
+        NSString *pbErr = nil;
+        NSDictionary *pb = [self phoneBuild:link path:pushRemote out:phoneOut
+                                  initPath:initRemote initLen:initEnd
+                                    constIv:constIv ivSize:prots[0].perSampleIvSize
+                                    segKeys:segKeys trackKey:trackUse pfKey:pfUse
+                                       logf:logf error:&pbErr];
+        [self phoneCleanup:@[initRemote, pushRemote]];
+        if (!pb) {
+            [self phoneCleanup:@[phoneOut]];
+            [self endLink:link dual:dual];
+            if (err) *err = pbErr;
+            return nil;
+        }
+        NSString *gerr = nil;
+        BOOL pulled = [OBADB pull:phoneOut to:outPath error:&gerr];
+        [self phoneCleanup:@[phoneOut]];
+        if (!pulled) {
+            [self endLink:link dual:dual];
+            if (err) *err = [NSString stringWithFormat:@"成品拉回失败: %@", gerr ?: @"?"];
+            return nil;
+        }
+        result = [NSMutableData dataWithContentsOfFile:outPath];
+        fragIdx = (uint32_t)[pb[@"frags"] unsignedIntValue];
+        totalBlocks = (uint32_t)[pb[@"blocks"] unsignedIntValue];
+        expectSamples = (unsigned)[pb[@"samples"] unsignedIntValue];
+        [self logf:logf fmt:@"[*] 手机直出完成 碎片=%u 样本=%u 块=%u 成品=%lu 字节",
+             fragIdx, expectSamples, totalBlocks, (unsigned long)result.length];
+    } else {
+        uint32_t totalSamples = 0;
+        result = [cleanedInit mutableCopy];
+        uint32_t fragOff = initEnd;
+        uint32_t *sOff = malloc(8192 * 4), *sSize = malloc(8192 * 4);
+        unsigned *sSubN = malloc(8192 * 4), *sSubOff = malloc(8192 * 4);
+        uint32_t *subBuf = malloc(8192 * 2 * 4);
+        uint32_t *spliceBuf = malloc(512 * 2 * 4);
+        BOOL bufsOk = sOff && sSize && sSubN && sSubOff && subBuf && spliceBuf;
+        if (!bufsOk) { [self endLink:link dual:dual]; if (err) *err = @"内存不足"; return nil; }
 
-    NSString *loopErr = nil;
-    for (;;) {
-        if (*cancelFlag) { loopErr = @"已取消"; break; }
-        uint32_t moofOff, moofLen, mdatOff, mdatLen, next;
-        if (![OBMP4 fragments:fileBuf len:fileLen from:fragOff moofOff:&moofOff moofLen:&moofLen
-                       mdatOff:&mdatOff mdatLen:&mdatLen next:&next]) break;
-        loopErr = [self runFragment:fragIdx data:fileBuf
-                             moofOff:moofOff moofLen:moofLen mdatOff:mdatOff mdatLen:mdatLen
-                                prot:&prots[0] keyMap:keyMap segments:segments
-                          prefetchPart:prefetchPart constIv:constIv link:link dual:dual result:result
-                                 sOff:sOff sSize:sSize sSubN:sSubN sSubOff:sSubOff
-                               subBuf:subBuf spliceBuf:spliceBuf
-                                 logf:logf cancel:cancelFlag
-                          totalSamples:&totalSamples totalBlocks:&totalBlocks];
-        if (loopErr) break;
-        fragIdx++;
-        fragOff = next;
+        NSString *loopErr = nil;
+        for (;;) {
+            if (*cancelFlag) { loopErr = @"已取消"; break; }
+            uint32_t moofOff, moofLen, mdatOff, mdatLen, next;
+            if (![OBMP4 fragments:fileBuf len:fileLen from:fragOff moofOff:&moofOff moofLen:&moofLen
+                           mdatOff:&mdatOff mdatLen:&mdatLen next:&next]) break;
+            loopErr = [self runFragment:fragIdx data:fileBuf
+                                 moofOff:moofOff moofLen:moofLen mdatOff:mdatOff mdatLen:mdatLen
+                                    prot:&prots[0] keyMap:keyMap segments:segments
+                              prefetchPart:prefetchPart constIv:constIv link:link dual:dual result:result
+                                     sOff:sOff sSize:sSize sSubN:sSubN sSubOff:sSubOff
+                                   subBuf:subBuf spliceBuf:spliceBuf
+                                     logf:logf cancel:cancelFlag
+                              totalSamples:&totalSamples totalBlocks:&totalBlocks];
+            if (loopErr) break;
+            fragIdx++;
+            fragOff = next;
+        }
+        free(sOff); free(sSize); free(sSubN); free(sSubOff); free(subBuf); free(spliceBuf);
+        if (loopErr) {
+            [self endLink:link dual:dual];
+            if ([loopErr rangeOfString:@"已取消"].location != NSNotFound && *cancelFlag) loopErr = @"已取消";
+            if (err) *err = loopErr;
+            return nil;
+        }
+        expectSamples = totalSamples;
+        [self logf:logf fmt:@"[*] 碎片=%u 样本=%u 块=%u", fragIdx, totalSamples, totalBlocks];
     }
-    free(sOff); free(sSize); free(sSubN); free(sSubOff); free(subBuf); free(spliceBuf);
-    if (loopErr) {
+    if (!result.length) {
         [self endLink:link dual:dual];
-        if ([loopErr rangeOfString:@"已取消"].location != NSNotFound && *cancelFlag) loopErr = @"已取消";
-        if (err) *err = loopErr;
+        if (err) *err = @"成品为空";
         return nil;
     }
-    [self logf:logf fmt:@"[*] 碎片=%u 样本=%u 块=%u", fragIdx, totalSamples, totalBlocks];
 
     // ---- 7) 写盘 ----
     [result writeToFile:outPath atomically:YES];
     [self logf:logf fmt:@"[+] 写盘 %@ (%lu 字节)", outPath, (unsigned long)result.length];
 
     // ---- 8) 验证 ----
-    NSDictionary *verify = [self verify:outPath expect:totalSamples];
+    NSDictionary *verify = [self verify:outPath expect:expectSamples];
     [self logf:logf fmt:@"[%@] 验证: %@", [verify[@"ok"] boolValue] ? @"✅" : @"❌", verify];
     if (![verify[@"ok"] boolValue]) {
         // 验证失败不删产物:改名 .broken 留档(坏包要人工定位;重下时 .m4a 不存在不会被误判已收)
@@ -674,7 +806,7 @@ static const NSUInteger kTcpBatchCap = 8000000;
         [[NSFileManager defaultManager] moveItemAtPath:outPath toPath:broken error:nil];
         [self endLink:link dual:dual];
         if (err) *err = [NSString stringWithFormat:@"验证失败 packets=%@ expect=%u fferr=%@",
-                         verify[@"packets"], totalSamples, verify[@"ffmpeg_errors"]];
+                         verify[@"packets"], expectSamples, verify[@"ffmpeg_errors"]];
         return nil;
     }
 
@@ -700,6 +832,7 @@ static const NSUInteger kTcpBatchCap = 8000000;
         @"size": @(result.length), @"segments": @(fragIdx), @"blocks": @(totalBlocks),
         @"secs": @([NSDate date].timeIntervalSince1970 - t0),
         @"verify": verify, @"tagged": @(tagged), @"source": @"native",
+        @"merge": phoneMerge ? @"phone" : @"mac",
         @"transport": dual ? @"tcp" : @"rpc",
     };
     NSData *sj = [NSJSONSerialization dataWithJSONObject:sidecar options:NSJSONWritingPrettyPrinted error:NULL];
@@ -745,8 +878,10 @@ static const NSUInteger kTcpBatchCap = 8000000;
                                  cancel:(volatile BOOL *)cancelFlag
                                   error:(NSString * _Nullable * _Nullable)err {
     NSTimeInterval t0 = [NSDate date].timeIntervalSince1970;
-    [self logf:logf fmt:@"=== adam %@ 缓存直解开始 ===", adam];
-    MDPDual *dual = nil; // 直传双链(key 就绪后按配置建,失败回退引擎通道)
+    [self logf:logf fmt:@"=== adam %@ 缓存直解开始(%@) ===", adam,
+         [[AMDConfig shared].mergeMode isEqualToString:@"phone"] ? @"手机官方直出" : @"本机合并"];
+    MDPDual *dual = nil; // 直传双链(key 就绪后按配置建,失败回退引擎通道;手机直出不建)
+    BOOL phoneMerge = [[AMDConfig shared].mergeMode isEqualToString:@"phone"];
     NSString *c2 = [NSString stringWithFormat:@"/data/data/%@/no_backup/assets/hls", OB_PHONE_PKG];
 
     // ---- 0) 缓存目录三件套 ----
@@ -811,32 +946,43 @@ static const NSUInteger kTcpBatchCap = 8000000;
     }
     [self logf:logf fmt:@"[*] key 就绪 track=%luB prefetch=%luB", (unsigned long)trackUse.length, (unsigned long)pfUse.length];
 
-    // ---- 2.5) 直传建链(失败不拦路,回退引擎通道) ----
-    dual = [self buildDual:link logf:logf];
+    // ---- 2.5) 直传建链(手机直出不需要:组装走引擎 RPC;失败不拦路,回退引擎通道) ----
+    if (!phoneMerge) dual = [self buildDual:link logf:logf];
 
-    // ---- 3) 拉本地文件(pull,二进制安全) ----
-    NSString *stage = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@".stage_%@", adam]];
-    [[NSFileManager defaultManager] createDirectoryAtPath:stage withIntermediateDirectories:YES attributes:nil error:NULL];
-    for (NSString *fn in @[plFn, assetFn]) {
-        if (![OBADB pull:[NSString stringWithFormat:@"%@/%@/%@", c2, adam, fn]
-                      to:[stage stringByAppendingPathComponent:fn] error:&cerr]) {
+    // ---- 3) 清单与资产(手机直出:资产留在手机原位,只取清单文本) ----
+    NSString *assetPhone = [NSString stringWithFormat:@"%@/%@/%@", c2, adam, assetFn];
+    NSString *mediaText = nil;
+    NSData *fileData = nil;
+    NSString *stage = nil;
+    if (phoneMerge) {
+        mediaText = [OBADB suCat:[NSString stringWithFormat:@"%@/%@/%@", c2, adam, plFn]];
+        if (!mediaText.length) {
             [self endLink:link dual:dual];
-            if (err) *err = [NSString stringWithFormat:@"拉取 %@: %@", fn, cerr ?: @"?"];
+            if (err) *err = @"缓存清单读取失败";
+            return nil;
+        }
+    } else {
+        stage = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@".stage_%@", adam]];
+        [[NSFileManager defaultManager] createDirectoryAtPath:stage withIntermediateDirectories:YES attributes:nil error:NULL];
+        for (NSString *fn in @[plFn, assetFn]) {
+            if (![OBADB pull:[NSString stringWithFormat:@"%@/%@/%@", c2, adam, fn]
+                          to:[stage stringByAppendingPathComponent:fn] error:&cerr]) {
+                [self endLink:link dual:dual];
+                if (err) *err = [NSString stringWithFormat:@"拉取 %@: %@", fn, cerr ?: @"?"];
+                return nil;
+            }
+        }
+        fileData = [NSData dataWithContentsOfFile:[stage stringByAppendingPathComponent:assetFn]];
+        mediaText = [NSString stringWithContentsOfFile:[stage stringByAppendingPathComponent:plFn]
+                                              encoding:NSUTF8StringEncoding error:NULL];
+        if (!fileData || !mediaText) { [self endLink:link dual:dual]; if (err) *err = @"暂存文件读取失败"; return nil; }
+        if (assetSize && (uint64_t)fileData.length != assetSize.unsignedLongLongValue) {
+            [self endLink:link dual:dual];
+            if (err) *err = [NSString stringWithFormat:@"缓存不完整 %lu != %@(在 App 里重播一次可补全)",
+                             (unsigned long)fileData.length, assetSize];
             return nil;
         }
     }
-    NSData *fileData = [NSData dataWithContentsOfFile:[stage stringByAppendingPathComponent:assetFn]];
-    NSString *mediaText = [NSString stringWithContentsOfFile:[stage stringByAppendingPathComponent:plFn]
-                                                   encoding:NSUTF8StringEncoding error:NULL];
-    if (!fileData || !mediaText) { [self endLink:link dual:dual]; if (err) *err = @"暂存文件读取失败"; return nil; }
-    if (assetSize && (uint64_t)fileData.length != assetSize.unsignedLongLongValue) {
-        [self endLink:link dual:dual];
-        if (err) *err = [NSString stringWithFormat:@"缓存不完整 %lu != %@(在 App 里重播一次可补全)",
-                         (unsigned long)fileData.length, assetSize];
-        return nil;
-    }
-    uint32_t fileLen = (uint32_t)fileData.length;
-    const uint8_t *fileBuf = fileData.bytes;
 
     // ---- 4) 清单与 key 方案 ----
     NSDictionary *pm = [OBPlaylist parseMedia:mediaText
@@ -862,57 +1008,150 @@ static const NSUInteger kTcpBatchCap = 8000000;
     }
     [self logf:logf fmt:@"[*] %@ | keyUri=%@ 段数=%lu", name, [OBPlaylist normKeyUri:trackUri], (unsigned long)segments.count];
 
-    // ---- 5) 碎片解密重建(与网络路线同构) ----
+    // ---- 5) 成品组装:本机合并(与网络路线同构)或手机官方直出(mpbuild) ----
     uint32_t initEnd = initRange.location + initRange.length;
-    OBProtBox prots[8];
-    int protN = [OBMP4 findProt:fileBuf len:fileLen initEnd:initEnd out:prots cap:8];
-    if (protN < 1) { [self endLink:link dual:dual]; if (err) *err = @"保护方案描述盒未找到"; return nil; }
-    unsigned ivLen = prots[0].constIvLen ?: 16;
-    // agent 的 ivB64 期望 IV 字节的 base64(参考脚本同款);hex 字符串按 base64 解出来是垃圾 IV
-    NSString *constIv = [[NSData dataWithBytes:prots[0].constIv length:ivLen]
-        base64EncodedStringWithOptions:0];
+    NSMutableData *result = nil;
+    uint32_t fragIdx = 0, totalBlocks = 0;
+    unsigned expectSamples = 0;
+    if (phoneMerge) {
+        // init 段单独取回(dd 头 initEnd 字节→pull,二进制安全),清洗与保护盒解析仍在 Mac
+        NSString *initRemote = [NSString stringWithFormat:@"/data/local/tmp/.amd_init_%@", adam];
+        [OBADB shellRetry:@[@"shell",
+            [NSString stringWithFormat:@"su -c 'dd if=%@ bs=%u count=1 of=%@ 2>/dev/null'",
+             assetPhone, initEnd, initRemote]] timeout:30 error:nil];
+        NSString *initLocal = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                               [NSString stringWithFormat:@"amd_init_%@", adam]];
+        BOOL initOk = [OBADB pull:initRemote to:initLocal error:nil];
+        [self phoneCleanup:@[initRemote]];
+        NSData *initData = initOk ? [NSData dataWithContentsOfFile:initLocal] : nil;
+        [[NSFileManager defaultManager] removeItemAtPath:initLocal error:NULL];
+        if ((uint32_t)initData.length < initEnd) {
+            [self endLink:link dual:dual];
+            if (err) *err = @"init 段取回不完整";
+            return nil;
+        }
+        OBProtBox prots[8];
+        int protN = [OBMP4 findProt:initData.bytes len:(uint32_t)initData.length
+                                            initEnd:(uint32_t)initData.length out:prots cap:8];
+        if (protN < 1) { [self endLink:link dual:dual]; if (err) *err = @"保护方案描述盒未找到"; return nil; }
+        unsigned ivLen = prots[0].constIvLen ?: 16;
+        // agent 的 ivB64 期望 IV 字节的 base64(参考脚本同款);hex 字符串按 base64 解出来是垃圾 IV
+        NSString *constIv = [[NSData dataWithBytes:prots[0].constIv length:ivLen]
+            base64EncodedStringWithOptions:0];
+        NSMutableData *cleaned = [OBMP4 cleanInit:initData.bytes initEnd:(uint32_t)initData.length dedupe:NO];
 
-    NSMutableData *result = [[OBMP4 cleanInit:fileBuf initEnd:initEnd dedupe:NO] mutableCopy];
-    uint32_t fragOff = initEnd, fragIdx = 0, totalSamples = 0, totalBlocks = 0;
-    uint32_t *sOff = malloc(8192 * 4), *sSize = malloc(8192 * 4);
-    unsigned *sSubN = malloc(8192 * 4), *sSubOff = malloc(8192 * 4);
-    uint32_t *subBuf = malloc(8192 * 2 * 4);
-    uint32_t *spliceBuf = malloc(512 * 2 * 4);
-    BOOL bufsOk = sOff && sSize && sSubN && sSubOff && subBuf && spliceBuf;
+        NSMutableArray *segKeys = [NSMutableArray arrayWithCapacity:segments.count];
+        for (NSDictionary *seg in segments) {
+            NSString *ku = [OBPlaylist normKeyUri:(seg[@"key"] == [NSNull null] || !seg[@"key"]) ? nil : seg[@"key"]];
+            if (!ku.length) ku = prefetchPart;
+            [segKeys addObject:([ku containsString:prefetchPart] ? @"p" : @"t")];
+        }
+        // 清洗后的 init push 回手机(小文件,agent Java 直读;零 base64)
+        NSString *icLocal = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                             [NSString stringWithFormat:@"amd_ic_%@.bin", adam]];
+        [cleaned writeToFile:icLocal atomically:YES];
+        NSString *icRemote = [NSString stringWithFormat:@"/data/local/tmp/.amd_ic_%@", adam];
+        NSString *iperr = nil;
+        BOOL ipushed = [OBADB push:icLocal to:icRemote error:&iperr];
+        [[NSFileManager defaultManager] removeItemAtPath:icLocal error:NULL];
+        if (ipushed)
+            [OBADB shellRetry:@[@"shell", [NSString stringWithFormat:@"su -c 'chmod 644 %@'", icRemote]]
+                     timeout:20 error:nil];
+        if (!ipushed) {
+            [self phoneCleanup:@[icRemote]];
+            [self endLink:link dual:dual];
+            if (err) *err = [NSString stringWithFormat:@"init 推送失败: %@", iperr ?: @"?"];
+            return nil;
+        }
+        NSString *phoneOut = [NSString stringWithFormat:@"/data/data/%@/cache/obout_%@.m4a", OB_PHONE_PKG, adam];
+        [self logf:logf fmt:@"[*] 手机端组装中(资产留在手机原位,不中转)…"];
+        NSString *pbErr = nil;
+        NSDictionary *pb = [self phoneBuild:link path:assetPhone out:phoneOut
+                                  initPath:icRemote initLen:initEnd
+                                    constIv:constIv ivSize:prots[0].perSampleIvSize
+                                    segKeys:segKeys trackKey:trackUse pfKey:pfUse
+                                       logf:logf error:&pbErr];
+        [self phoneCleanup:@[icRemote]];
+        if (!pb) {
+            [self phoneCleanup:@[phoneOut]];
+            [self endLink:link dual:dual];
+            if (err) *err = pbErr;
+            return nil;
+        }
+        NSString *gerr = nil;
+        BOOL pulled = [OBADB pull:phoneOut to:outPath error:&gerr];
+        [self phoneCleanup:@[phoneOut]];
+        if (!pulled) {
+            [self endLink:link dual:dual];
+            if (err) *err = [NSString stringWithFormat:@"成品拉回失败: %@", gerr ?: @"?"];
+            return nil;
+        }
+        result = [NSMutableData dataWithContentsOfFile:outPath];
+        fragIdx = (uint32_t)[pb[@"frags"] unsignedIntValue];
+        totalBlocks = (uint32_t)[pb[@"blocks"] unsignedIntValue];
+        expectSamples = (unsigned)[pb[@"samples"] unsignedIntValue];
+        [self logf:logf fmt:@"[*] 手机直出完成 碎片=%u 样本=%u 块=%u 成品=%lu 字节",
+             fragIdx, expectSamples, totalBlocks, (unsigned long)result.length];
+    } else {
+        uint32_t totalSamples = 0;
+        uint32_t fileLen = (uint32_t)fileData.length;
+        const uint8_t *fileBuf = fileData.bytes;
+        OBProtBox prots[8];
+        int protN = [OBMP4 findProt:fileBuf len:fileLen initEnd:initEnd out:prots cap:8];
+        if (protN < 1) { [self endLink:link dual:dual]; if (err) *err = @"保护方案描述盒未找到"; return nil; }
+        unsigned ivLen = prots[0].constIvLen ?: 16;
+        // agent 的 ivB64 期望 IV 字节的 base64(参考脚本同款);hex 字符串按 base64 解出来是垃圾 IV
+        NSString *constIv = [[NSData dataWithBytes:prots[0].constIv length:ivLen]
+            base64EncodedStringWithOptions:0];
 
-    NSString *loopErr = nil;
-    for (;;) {
-        if (*cancelFlag) { loopErr = @"已取消"; break; }
-        uint32_t moofOff, moofLen, mdatOff, mdatLen, next;
-        if (![OBMP4 fragments:fileBuf len:fileLen from:fragOff moofOff:&moofOff moofLen:&moofLen
-                       mdatOff:&mdatOff mdatLen:&mdatLen next:&next]) break;
-        if (!bufsOk) { loopErr = @"内存不足"; break; }
-        loopErr = [self runFragment:fragIdx data:fileBuf
-                             moofOff:moofOff moofLen:moofLen mdatOff:mdatOff mdatLen:mdatLen
-                                prot:&prots[0] keyMap:keyMap segments:segments
-                          prefetchPart:prefetchPart constIv:constIv link:link dual:dual result:result
-                                 sOff:sOff sSize:sSize sSubN:sSubN sSubOff:sSubOff
-                               subBuf:subBuf spliceBuf:spliceBuf
-                                 logf:logf cancel:cancelFlag
-                          totalSamples:&totalSamples totalBlocks:&totalBlocks];
-        if (loopErr) break;
-        fragIdx++;
-        fragOff = next;
+        result = [[OBMP4 cleanInit:fileBuf initEnd:initEnd dedupe:NO] mutableCopy];
+        uint32_t fragOff = initEnd;
+        uint32_t *sOff = malloc(8192 * 4), *sSize = malloc(8192 * 4);
+        unsigned *sSubN = malloc(8192 * 4), *sSubOff = malloc(8192 * 4);
+        uint32_t *subBuf = malloc(8192 * 2 * 4);
+        uint32_t *spliceBuf = malloc(512 * 2 * 4);
+        BOOL bufsOk = sOff && sSize && sSubN && sSubOff && subBuf && spliceBuf;
+
+        NSString *loopErr = nil;
+        for (;;) {
+            if (*cancelFlag) { loopErr = @"已取消"; break; }
+            uint32_t moofOff, moofLen, mdatOff, mdatLen, next;
+            if (![OBMP4 fragments:fileBuf len:fileLen from:fragOff moofOff:&moofOff moofLen:&moofLen
+                           mdatOff:&mdatOff mdatLen:&mdatLen next:&next]) break;
+            if (!bufsOk) { loopErr = @"内存不足"; break; }
+            loopErr = [self runFragment:fragIdx data:fileBuf
+                                 moofOff:moofOff moofLen:moofLen mdatOff:mdatOff mdatLen:mdatLen
+                                    prot:&prots[0] keyMap:keyMap segments:segments
+                              prefetchPart:prefetchPart constIv:constIv link:link dual:dual result:result
+                                     sOff:sOff sSize:sSize sSubN:sSubN sSubOff:sSubOff
+                                   subBuf:subBuf spliceBuf:spliceBuf
+                                     logf:logf cancel:cancelFlag
+                              totalSamples:&totalSamples totalBlocks:&totalBlocks];
+            if (loopErr) break;
+            fragIdx++;
+            fragOff = next;
+        }
+        free(sOff); free(sSize); free(sSubN); free(sSubOff); free(subBuf); free(spliceBuf);
+        [[NSFileManager defaultManager] removeItemAtPath:stage error:NULL];
+        if (loopErr) {
+            [self endLink:link dual:dual];
+            if ([loopErr rangeOfString:@"已取消"].location != NSNotFound && *cancelFlag) loopErr = @"已取消";
+            if (err) *err = loopErr;
+            return nil;
+        }
+        expectSamples = totalSamples;
+        [self logf:logf fmt:@"[*] 碎片=%u 样本=%u 块=%u", fragIdx, totalSamples, totalBlocks];
     }
-    free(sOff); free(sSize); free(sSubN); free(sSubOff); free(subBuf); free(spliceBuf);
-    [[NSFileManager defaultManager] removeItemAtPath:stage error:NULL];
-    if (loopErr) {
+    if (!result.length) {
         [self endLink:link dual:dual];
-        if ([loopErr rangeOfString:@"已取消"].location != NSNotFound && *cancelFlag) loopErr = @"已取消";
-        if (err) *err = loopErr;
+        if (err) *err = @"成品为空";
         return nil;
     }
-    [self logf:logf fmt:@"[*] 碎片=%u 样本=%u 块=%u", fragIdx, totalSamples, totalBlocks];
 
     // ---- 6) 写盘/验证/sidecar ----
     [result writeToFile:outPath atomically:YES];
     [self logf:logf fmt:@"[+] 写盘 %@ (%lu 字节)", outPath, (unsigned long)result.length];
-    NSDictionary *verify = [self verify:outPath expect:totalSamples];
+    NSDictionary *verify = [self verify:outPath expect:expectSamples];
     [self logf:logf fmt:@"[%@] 验证: %@", [verify[@"ok"] boolValue] ? @"✅" : @"❌", verify];
     if (![verify[@"ok"] boolValue]) {
         // 验证失败不删产物:改名 .broken 留档(与网络路线同口径)
@@ -921,7 +1160,7 @@ static const NSUInteger kTcpBatchCap = 8000000;
         [[NSFileManager defaultManager] moveItemAtPath:outPath toPath:broken error:nil];
         [self endLink:link dual:dual];
         if (err) *err = [NSString stringWithFormat:@"验证失败 packets=%@ expect=%u fferr=%@",
-                         verify[@"packets"], totalSamples, verify[@"ffmpeg_errors"]];
+                         verify[@"packets"], expectSamples, verify[@"ffmpeg_errors"]];
         return nil;
     }
     // 标签写入(与网络路线同一套;封面拉取失败不拦路)
@@ -942,6 +1181,7 @@ static const NSUInteger kTcpBatchCap = 8000000;
         @"adam": adam, @"artist": meta[@"artist"] ?: @"", @"title": meta[@"title"] ?: @"",
         @"codec": @"alac", @"keyUri": trackUri, @"source": @"native-cache",
         @"asset": assetFn, @"size": @(result.length), @"segments": @(fragIdx),
+        @"merge": phoneMerge ? @"phone" : @"mac",
         @"transport": dual ? @"tcp" : @"rpc",
         @"blocks": @(totalBlocks), @"secs": @([NSDate date].timeIntervalSince1970 - t0),
         @"verify": verify, @"tagged": @(tagged),

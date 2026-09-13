@@ -52,6 +52,9 @@ NS_ASSUME_NONNULL_BEGIN
 // 返回可读日志行(GUI 逐行上屏)。
 + (NSArray<NSString *> *)installEngineService;
 
+// 取消:对在跑的手机直出组装(mpbuild)发中止旗标,碎片间隙退出;未在跑时空转无害
++ (void)abortPhoneBuild;
+
 @end
 
 NS_ASSUME_NONNULL_END

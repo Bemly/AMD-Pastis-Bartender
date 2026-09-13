@@ -23,6 +23,7 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     self.scriptDir = @"/Users/bemly/Projects/amd";
     self.outDir = @"/Users/bemly/Projects/amd/downloads";
     self.useTcp = YES;
+    self.mergeMode = @"mac";
     self.lyricMode = @"embed";
     self.lyricEncoding = @"UTF-8";
     self.lyricLayout = @"stagger";
@@ -46,6 +47,7 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
         self.scriptDir = [d stringForKey:[kPfx stringByAppendingString:@"scriptDir"]] ?: self.scriptDir;
         self.outDir = [d stringForKey:[kPfx stringByAppendingString:@"outDir"]] ?: self.outDir;
         self.useTcp = [d boolForKey:[kPfx stringByAppendingString:@"useTcp"]];
+        self.mergeMode = [d stringForKey:[kPfx stringByAppendingString:@"mergeMode"]] ?: @"mac";
         self.lyricMode = [d stringForKey:[kPfx stringByAppendingString:@"lyricMode"]] ?: @"embed";
         self.lyricEncoding = [d stringForKey:[kPfx stringByAppendingString:@"lyricEncoding"]] ?: @"UTF-8";
         self.lyricLayout = [d stringForKey:[kPfx stringByAppendingString:@"lyricLayout"]] ?: @"stagger";
@@ -67,6 +69,9 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
         }
         [self save];
     }
+    // 测试覆盖:AMD_MERGE=phone/mac 直接管合并方式(验收入 CLI 时不改已存设置)
+    NSString *ev = [[NSProcessInfo processInfo].environment objectForKey:@"AMD_MERGE"];
+    if (ev.length) self.mergeMode = ev;
 }
 
 - (NSString *)detectAdbPath {
@@ -97,6 +102,7 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     [d setObject:self.scriptDir forKey:[kPfx stringByAppendingString:@"scriptDir"]];
     [d setObject:self.outDir forKey:[kPfx stringByAppendingString:@"outDir"]];
     [d setBool:self.useTcp forKey:[kPfx stringByAppendingString:@"useTcp"]];
+    [d setObject:self.mergeMode forKey:[kPfx stringByAppendingString:@"mergeMode"]];
     [d setObject:self.lyricMode forKey:[kPfx stringByAppendingString:@"lyricMode"]];
     [d setObject:self.lyricEncoding forKey:[kPfx stringByAppendingString:@"lyricEncoding"]];
     [d setObject:self.lyricLayout forKey:[kPfx stringByAppendingString:@"lyricLayout"]];

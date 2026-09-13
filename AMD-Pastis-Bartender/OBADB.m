@@ -84,6 +84,21 @@
     return ok;
 }
 
++ (BOOL)push:(NSString *)localPath to:(NSString *)remotePath error:(NSString ** _Nullable)err {
+    NSString *last = nil;
+    for (int i = 0; i < 3; i++) {
+        NSMutableArray *args = [self baseArgs];
+        [args addObjectsFromArray:@[@"push", localPath, remotePath]];
+        int st = 0;
+        [TaskRunner runSync:[self resolvedAdbPath] arguments:args cwd:nil env:nil status:&st];
+        if (st == 0) return YES;
+        last = @"adb push 失败";
+        [NSThread sleepForTimeInterval:1.0 * (i + 1)];
+    }
+    if (err) *err = last;
+    return NO;
+}
+
 + (void)deeplinkSong:(NSString *)adam {
     NSString *cmd = [NSString stringWithFormat:
         @"am start -a android.intent.action.VIEW -d https://%@/song/%@ -p %@",

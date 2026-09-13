@@ -22,6 +22,9 @@ NS_ASSUME_NONNULL_BEGIN
 // su cp → /data/local/tmp/dlstage → adb pull(二进制安全);成功返回 YES
 + (BOOL)pull:(NSString *)remotePath to:(NSString *)localPath error:(NSString * _Nullable * _Nullable)err;
 
+// adb push 到手机(对称 pull;多用于 /data/local/tmp 暂存);成功返回 YES
++ (BOOL)push:(NSString *)localPath to:(NSString *)remotePath error:(NSString * _Nullable * _Nullable)err;
+
 + (void)deeplinkSong:(NSString *)adam;
 + (void)mediaKeyPlay;
 + (void)mediaKeyNext;

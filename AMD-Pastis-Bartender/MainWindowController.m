@@ -65,6 +65,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     // 下载页
     NSTextField *_adamF;
     NSTextField *_dlStatusL;
+    NSPopUpButton *_mergeP;   // 合并方式:mac=本机合并(默认) phone=手机官方解码器直出
     NSButton *_cancelBtn;
     TaskRunner *_dlTask;
     volatile BOOL _dlCancel;
@@ -782,6 +783,12 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         [r addViews:@[_dlStatusL, _cancelBtn,
                       [self button:@"打开输出目录" action:@selector(openOutDir:)]]];
         [v addViews:@[r]];
+        _mergeP = [self popWithTitles:@[@"本机 ff 合并", @"手机官方解码器直出"]];
+        [v addViews:@[
+            [self formRow:@"合并" items:@[_mergeP]],
+            [self hint:@"手机直出=解密与组装全在手机端官方解码器完成,Mac 只拉成品"
+                        "(缓存直解整曲不过线;网络路线会先把整曲推回手机);默认本机合并。"],
+        ]];
         [v addViews:@[
             [self hint:@"两种方式都在工具栏:「开始下载」走网络(自动深链预取→下载→解密→验证);"
                         "「缓存直解」只吃手机已缓存的曲目,零网络,要求 key 未过期。"],
@@ -790,6 +797,8 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         [self stretchChildren:v];
         [self addCard:[self glassCard:@"执行" body:v] toPage:page];
     }
+    // 懒建:控件现在才出生,把已存配置刷上去(同歌词页口径)
+    [_mergeP selectItemAtIndex:([[[AMDConfig shared] mergeMode] isEqualToString:@"phone"] ? 1 : 0)];
     return [self scrollWrap:page];
 }
 
@@ -979,6 +988,8 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     _scriptDirF.stringValue = c.scriptDir ?: @"";
     _outDirF.stringValue = c.outDir ?: @"";
     _useTcpC.state = c.useTcp ? NSControlStateValueOn : NSControlStateValueOff;
+    // 下载页懒建时控件可能未出生(nil 消息空转),建页处会再刷一次
+    [_mergeP selectItemAtIndex:([c.mergeMode isEqualToString:@"phone"] ? 1 : 0)];
     [self loadLyricConfigToUI];
 }
 
@@ -1012,6 +1023,8 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     c.scriptDir = [_scriptDirF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     c.outDir = [_outDirF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     c.useTcp = (_useTcpC.state == NSControlStateValueOn);
+    // 下载页没建出来(_mergeP 为 nil)就不碰已存值(同歌词页口径)
+    if (_mergeP) c.mergeMode = ([_mergeP indexOfSelectedItem] == 1) ? @"phone" : @"mac";
     [self readLyricUIToConfig];
 }
 
@@ -1828,6 +1841,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         [self appendLog:@"[下载] 已发送取消\n"];
     }
     _dlCancel = YES;           // 原生引擎:碎片间退出
+    [OBDLJob abortPhoneBuild]; // 手机直出:发中止旗标(碎片间隙退出)
     _cancelBtn.enabled = NO;   // 忙碌态由 onEnd 的 applyDownloadBusy 统一复位
 }
 
