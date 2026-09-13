@@ -25,6 +25,7 @@
 		300000000000000000000010 /* OBDL.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000021 /* OBDL.m */; };
 		300000000000000000000012 /* OBLyric.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000025 /* OBLyric.m */; };
 		300000000000000000000013 /* OBLyricSearch.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000027 /* OBLyricSearch.m */; };
+		300000000000000000000014 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000028 /* AppIcon.icns */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -65,6 +66,7 @@
 		200000000000000000000025 /* OBLyric.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBLyric.m; sourceTree = "<group>"; };
 		200000000000000000000026 /* OBLyricSearch.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = OBLyricSearch.h; sourceTree = "<group>"; };
 		200000000000000000000027 /* OBLyricSearch.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = OBLyricSearch.m; sourceTree = "<group>"; };
+		200000000000000000000028 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = com.apple.icns; path = AppIcon.icns; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -134,6 +136,7 @@
 				200000000000000000000025 /* OBLyric.m */,
 				200000000000000000000026 /* OBLyricSearch.h */,
 				200000000000000000000027 /* OBLyricSearch.m */,
+				200000000000000000000028 /* AppIcon.icns */,
 			);
 			path = AMD-Pastis-Bartender;
 			sourceTree = "<group>";
@@ -203,6 +206,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				300000000000000000000014 /* AppIcon.icns in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
