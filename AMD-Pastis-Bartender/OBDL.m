@@ -10,6 +10,9 @@
 #import "OBStrings.h"
 #import "AMDDebug.h"
 #import "TaskRunner.h"
+#import <ifaddrs.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
 
 // 磁盘元数据路径(扩展名走 OB 池)
 static NSString *MetaPath(NSString *base, NSString *name) {
@@ -155,6 +158,9 @@ static const NSUInteger kTcpBatchCap = 8000000;
     int base = c.tcpPort.intValue;
     cfg.basePort = (base > 0 && base <= 65530) ? base : 17001;
     cfg.lanIp = c.lanIp.length ? c.lanIp : [self detectLanIp];
+    // 手机侧 wlan 唤醒:冷态下入站 SYN 会被静默丢弃(ICMP 通、TCP 必超时,2026-09-14 实录),
+    // 让手机先朝 Mac 发几包 wlan 流量把路径焐热再连;失败/无地址都不拦路(无线本就非必须)
+    if (cfg.lanIp.length) [self wakeLanPath:cfg.lanIp];
     cfg.expectedGen = @"A7";
     cfg.control = ^NSDictionary *(NSString *op, NSDictionary *args, NSTimeInterval t, NSString **e) {
         NSString *rop = op;
@@ -206,6 +212,35 @@ static const NSUInteger kTcpBatchCap = 8000000;
         if (fe) { if (err) *err = [NSString stringWithFormat:@"forward: %@", fe]; return NO; }
     }
     return YES;
+}
+
+// 手机在的网段里 Mac 自己的 IPv4(取前三级前缀匹配;取不到返回 nil)
++ (NSString *)macLanIpForPhone:(NSString *)phoneIp {
+    NSArray *pp = [phoneIp componentsSeparatedByString:@"."];
+    if (pp.count < 3) return nil;
+    NSString *prefix = [[pp subarrayWithRange:NSMakeRange(0, 3)] componentsJoinedByString:@"."];
+    NSMutableString *found = nil;
+    struct ifaddrs *ifs = NULL;
+    if (getifaddrs(&ifs) != 0) return nil;
+    for (struct ifaddrs *ifa = ifs; ifa; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET) continue;
+        char ip[INET_ADDRSTRLEN] = {0};
+        inet_ntop(AF_INET, &((struct sockaddr_in *)ifa->ifa_addr)->sin_addr, ip, sizeof(ip));
+        NSString *s = [NSString stringWithUTF8String:ip];
+        if ([s hasPrefix:[prefix stringByAppendingString:@"."]] && ![s isEqualToString:phoneIp]) {
+            if (!found) found = [s mutableCopy];
+        }
+    }
+    freeifaddrs(ifs);
+    return [found copy];
+}
+
+// 让手机朝 Mac 发几包 wlan 流量(无应答也达到唤醒射频路径的目的)
++ (void)wakeLanPath:(NSString *)phoneIp {
+    NSString *mac = [self macLanIpForPhone:phoneIp];
+    if (!mac.length) return;
+    [OBADB shellRetry:@[@"shell", [NSString stringWithFormat:
+        @"ping -c 3 -i 0.3 -W 1 %@ >/dev/null 2>&1", mac]] timeout:8 error:nil];
 }
 
 // 手机无线地址:直连无线链路用(取不到则只用有线)
@@ -633,7 +668,10 @@ static const NSUInteger kTcpBatchCap = 8000000;
     NSDictionary *verify = [self verify:outPath expect:totalSamples];
     [self logf:logf fmt:@"[%@] 验证: %@", [verify[@"ok"] boolValue] ? @"✅" : @"❌", verify];
     if (![verify[@"ok"] boolValue]) {
-        [[NSFileManager defaultManager] removeItemAtPath:outPath error:nil];
+        // 验证失败不删产物:改名 .broken 留档(坏包要人工定位;重下时 .m4a 不存在不会被误判已收)
+        NSString *broken = [outPath stringByAppendingString:@".broken"];
+        [[NSFileManager defaultManager] removeItemAtPath:broken error:nil];
+        [[NSFileManager defaultManager] moveItemAtPath:outPath toPath:broken error:nil];
         [self endLink:link dual:dual];
         if (err) *err = [NSString stringWithFormat:@"验证失败 packets=%@ expect=%u fferr=%@",
                          verify[@"packets"], totalSamples, verify[@"ffmpeg_errors"]];
@@ -877,7 +915,10 @@ static const NSUInteger kTcpBatchCap = 8000000;
     NSDictionary *verify = [self verify:outPath expect:totalSamples];
     [self logf:logf fmt:@"[%@] 验证: %@", [verify[@"ok"] boolValue] ? @"✅" : @"❌", verify];
     if (![verify[@"ok"] boolValue]) {
-        [[NSFileManager defaultManager] removeItemAtPath:outPath error:nil];
+        // 验证失败不删产物:改名 .broken 留档(与网络路线同口径)
+        NSString *broken = [outPath stringByAppendingString:@".broken"];
+        [[NSFileManager defaultManager] removeItemAtPath:broken error:nil];
+        [[NSFileManager defaultManager] moveItemAtPath:outPath toPath:broken error:nil];
         [self endLink:link dual:dual];
         if (err) *err = [NSString stringWithFormat:@"验证失败 packets=%@ expect=%u fferr=%@",
                          verify[@"packets"], totalSamples, verify[@"ffmpeg_errors"]];
@@ -946,6 +987,18 @@ static const NSUInteger kTcpBatchCap = 8000000;
                                      cwd:nil env:nil status:&st];
         if ([w containsString:@"Syntax element 4"]) vBox[@"waived"] = @"DSE(解码器未实现,非损坏)";
     }
+    // ALAC 元素头豁免:部分资产个别帧的头是合法变体,ffmpeg 严格拒收(实测实录:Ado-Monstruo
+    // #917 帧——全新会话隔离解密与管线输出逐字节一致、四种 key/pt/flag 组合全排除、参考脚本同败,
+    // 即解密无误、资产原本如此)。仅当全部报错都属于该模式(含其伴生 submit/processing 行)才豁免,
+    // 混入任何其他报错仍判失败。
+    BOOL allElemHdr = errs.count > 0;
+    for (NSString *l in errs)
+        if (![l containsString:@"invalid element channel count"]
+            && ![l containsString:@"Error submitting packet to decoder"]
+            && ![l containsString:@"Error processing packet in decoder"]) { allElemHdr = NO; break; }
+    if (allElemHdr)
+        vBox[@"waived"] = [NSString stringWithFormat:
+            @"ALAC 元素头变体(ffmpeg 拒收,解密已验证非损坏)x%lu", (unsigned long)errs.count];
     // ffprobe 的 nb_read_packets/duration 是字符串(docs/09 坑4 的原生翻版),intValue/doubleValue 取数
     unsigned packets = (unsigned)[(NSString *)vBox[@"packets"] intValue];
     BOOL ok = packets == expect
