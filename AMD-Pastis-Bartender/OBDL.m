@@ -292,44 +292,142 @@ static const NSUInteger kTcpBatchCap = 8000000;
     return all;
 }
 
-#pragma mark - 手机直出组装(手机端 mpbuild;传输零 base64:整曲/成品/清洗后 init 全走 push/pull 原始字节)
+#pragma mark - 手机直出组装(分片 RPC mpscan/mpinit/mpfrag;传输零 base64:整曲/成品/清洗后 init 全走 push/pull 原始字节)
 
-// 手机端全量解密+组装:入参 path 为手机本地整曲 fMP4(缓存资产原位或 Mac 推送),
-// initPath 为 Mac 预先 push 的清洗后 init 小文件;成品写到手机 out,由调用方 pull 回来。
-// 返回应答 payload(frags/samples/blocks/size)。
-+ (nullable NSDictionary *)phoneBuild:(OBLink *)link
-                                 path:(NSString *)phonePath
-                                  out:(NSString *)phoneOut
-                             initPath:(NSString *)initPath
-                              initLen:(uint32_t)initLen
-                              constIv:(NSString *)ivB64
-                               ivSize:(unsigned)ivSize
-                              segKeys:(NSArray<NSString *> *)segKeys
-                             trackKey:(NSString *)trackKey
-                                pfKey:(NSString *)pfKey
-                                 logf:(void (^)(NSString *))f
-                                 error:(NSString * _Nullable * _Nullable)err {
-    NSUInteger np = 0;
-    for (NSString *k in segKeys) if ([k isEqualToString:@"p"]) np++;
-    [self logf:f fmt:@"[*] 手机直出: %lu 碎片(预取键 %lu)",
-         (unsigned long)segKeys.count, (unsigned long)np];
-    NSString *resp = [link rpc:@"mpbuild"
-                          args:@{ @"path": phonePath, @"out": phoneOut,
-                                  @"initPath": initPath, @"initLen": @(initLen),
-                                  @"ivB64": ivB64, @"ivSize": @(ivSize),
-                                  @"segKeys": segKeys ?: @[],
-                                  @"keyT": trackKey, @"keyP": pfKey ?: @"" }
-                         data:nil timeout:900 error:nil];
-    if (!resp) { if (err) *err = @"手机直出 RPC 超时/断线"; return nil; }
-    NSDictionary *root = [NSJSONSerialization JSONObjectWithData:[resp dataUsingEncoding:NSUTF8StringEncoding]
-                                                         options:0 error:NULL];
-    NSDictionary *p = root[@"payload"];
+#pragma mark - 手机直出组装(分片 RPC mpscan/mpinit/mpfrag;传输零 base64:整曲/成品/清洗后 init 全走 push/pull 原始字节)
+
+// 单次 RPC 只装配一片:整曲单 RPC 会在手机端一次攒够 51200 个 JNI 全局引用,
+// 直接 SIGABRT(tombstone 2026-09-14 实录:5508 样本×~14/样本,死在第 3542 个)。
+// 每片约 350 样本≈5k 引用,与已验证的 decmany 包量同 envelope;逐片轮询取消并打进度。
+
+// 碎片表(纯字节头查)。返回 @[ @[moofO,moofS,mdatO,mdatS] ]。
++ (nullable NSArray *)mpScan:(OBLink *)link
+                       path:(NSString *)phonePath
+                    initLen:(uint32_t)initLen
+                       error:(NSString * _Nullable * _Nullable)err {
+    NSString *resp = [link rpc:@"mpscan"
+                          args:@{ @"path": phonePath, @"initLen": @(initLen) }
+                         data:nil timeout:60 error:nil];
+    if (!resp) { if (err) *err = @"碎片表 RPC 超时/断线"; return nil; }
+    NSDictionary *p = [NSJSONSerialization JSONObjectWithData:[resp dataUsingEncoding:NSUTF8StringEncoding]
+                                                      options:0 error:NULL][@"payload"];
+    NSArray *frags = [p isKindOfClass:[NSDictionary class]] ? p[@"frags"] : nil;
+    if (![p[@"ok"] boolValue] || ![frags isKindOfClass:[NSArray class]] || !frags.count) {
+        if (err) *err = [NSString stringWithFormat:@"碎片表失败: %@",
+                         ([p isKindOfClass:[NSDictionary class]] && p[@"error"]) ? p[@"error"] : @"应答异常"];
+        return nil;
+    }
+    return frags;
+}
+
+// 成品写 init(截断)。成功返回 init 字节数,失败 -1。
++ (long long)mpInit:(OBLink *)link
+           initPath:(NSString *)initPath
+                out:(NSString *)phoneOut
+              error:(NSString * _Nullable * _Nullable)err {
+    NSString *resp = [link rpc:@"mpinit"
+                          args:@{ @"initPath": initPath, @"out": phoneOut }
+                         data:nil timeout:60 error:nil];
+    if (!resp) { if (err) *err = @"成品写 init RPC 超时/断线"; return -1; }
+    NSDictionary *p = [NSJSONSerialization JSONObjectWithData:[resp dataUsingEncoding:NSUTF8StringEncoding]
+                                                      options:0 error:NULL][@"payload"];
     if (![p isKindOfClass:[NSDictionary class]] || ![p[@"ok"] boolValue]) {
-        if (err) *err = [NSString stringWithFormat:@"手机直出失败: %@",
-                         [p isKindOfClass:[NSDictionary class]] ? (p[@"error"] ?: @"?") : @"应答异常"];
+        if (err) *err = [NSString stringWithFormat:@"成品写 init 失败: %@",
+                         ([p isKindOfClass:[NSDictionary class]] && p[@"error"]) ? p[@"error"] : @"应答异常"];
+        return -1;
+    }
+    return [p[@"initSize"] longLongValue];
+}
+
+// 单碎片解密+追加。返回 payload(samples/blocks/size)。
++ (nullable NSDictionary *)mpFrag:(OBLink *)link
+                             path:(NSString *)phonePath
+                              out:(NSString *)phoneOut
+                            moofO:(long long)moofO moofS:(long long)moofS
+                            mdatO:(long long)mdatO mdatS:(long long)mdatS
+                           segKey:(NSString *)segKey
+                         trackKey:(NSString *)trackKey
+                            pfKey:(NSString *)pfKey
+                          constIv:(NSString *)ivB64
+                           ivSize:(unsigned)ivSize
+                            error:(NSString * _Nullable * _Nullable)err {
+    NSString *resp = [link rpc:@"mpfrag"
+                          args:@{ @"path": phonePath, @"out": phoneOut,
+                                  @"moofO": @(moofO), @"moofS": @(moofS),
+                                  @"mdatO": @(mdatO), @"mdatS": @(mdatS),
+                                  @"segKey": segKey ?: @"t",
+                                  @"keyT": trackKey, @"keyP": pfKey ?: @"",
+                                  @"ivB64": ivB64, @"ivSize": @(ivSize) }
+                         data:nil timeout:180 error:nil];
+    if (!resp) { if (err) *err = @"单碎片 RPC 超时/断线"; return nil; }
+    NSDictionary *p = [NSJSONSerialization JSONObjectWithData:[resp dataUsingEncoding:NSUTF8StringEncoding]
+                                                      options:0 error:NULL][@"payload"];
+    if (![p isKindOfClass:[NSDictionary class]] || ![p[@"ok"] boolValue]) {
+        if (err) *err = [NSString stringWithFormat:@"单碎片失败: %@",
+                         ([p isKindOfClass:[NSDictionary class]] && p[@"error"]) ? p[@"error"] : @"应答异常"];
         return nil;
     }
     return p;
+}
+
+// 手机端分片组装驱动:scan→init→逐片 mpfrag。入参 path 为手机本地整曲 fMP4
+// (缓存资产原位或 Mac 推送),initPath 为 Mac 预先 push 的清洗后 init 小文件;
+// 成品写到手机 out,由调用方拉回。返回 @{frags,samples,blocks,size}。
++ (nullable NSDictionary *)phoneAssemble:(OBLink *)link
+                                   path:(NSString *)phonePath
+                                    out:(NSString *)phoneOut
+                               initPath:(NSString *)initPath
+                                initLen:(uint32_t)initLen
+                                constIv:(NSString *)ivB64
+                                 ivSize:(unsigned)ivSize
+                                segKeys:(NSArray<NSString *> *)segKeys
+                               trackKey:(NSString *)trackKey
+                                  pfKey:(NSString *)pfKey
+                                   logf:(void (^)(NSString *))f
+                                 cancel:(volatile BOOL *)cancelFlag
+                                  error:(NSString * _Nullable * _Nullable)err {
+    NSString *serr = nil;
+    NSArray *frags = [self mpScan:link path:phonePath initLen:initLen error:&serr];
+    if (!frags) { if (err) *err = serr; return nil; }
+    if (frags.count != segKeys.count) {
+        if (err) *err = [NSString stringWithFormat:@"碎片表 %lu 与清单 %lu 对不上",
+                         (unsigned long)frags.count, (unsigned long)segKeys.count];
+        return nil;
+    }
+    NSUInteger np = 0;
+    for (NSString *k in segKeys) if ([k isEqualToString:@"p"]) np++;
+    [self logf:f fmt:@"[*] 手机直出: %lu 碎片(预取键 %lu,逐片 RPC)",
+         (unsigned long)frags.count, (unsigned long)np];
+    long long initSize = [self mpInit:link initPath:initPath out:phoneOut error:&serr];
+    if (initSize < 0) { if (err) *err = serr; return nil; }
+    unsigned totalS = 0, totalB = 0;
+    uint64_t totalSize = (uint64_t)initSize;
+    for (NSUInteger i = 0; i < frags.count; i++) {
+        if (cancelFlag && *cancelFlag) { if (err) *err = @"已取消"; return nil; }
+        NSArray *fr = frags[i];
+        if (![fr isKindOfClass:[NSArray class]] || fr.count < 4) {
+            if (err) *err = [NSString stringWithFormat:@"碎片 %lu 表项异常", (unsigned long)i];
+            return nil;
+        }
+        NSString *sk = (i < segKeys.count) ? segKeys[i] : @"t";
+        NSDictionary *r = [self mpFrag:link path:phonePath out:phoneOut
+                                moofO:[fr[0] longLongValue] moofS:[fr[1] longLongValue]
+                                mdatO:[fr[2] longLongValue] mdatS:[fr[3] longLongValue]
+                               segKey:sk trackKey:trackKey pfKey:pfKey
+                              constIv:ivB64 ivSize:ivSize error:&serr];
+        if (!r) {
+            if (serr && [serr rangeOfString:@"aborted"].location != NSNotFound) serr = @"已取消";
+            if (err) *err = serr;
+            return nil;
+        }
+        totalS += (unsigned)[r[@"samples"] unsignedIntValue];
+        totalB += (unsigned)[r[@"blocks"] unsignedIntValue];
+        totalSize += [r[@"size"] unsignedLongLongValue];
+        [self logf:f fmt:@"[*] frag %lu/%lu 样本=%@",
+             (unsigned long)(i + 1), (unsigned long)frags.count, r[@"samples"]];
+    }
+    return @{ @"frags": @(frags.count), @"samples": @(totalS),
+              @"blocks": @(totalB), @"size": @(totalSize) };
 }
 
 // 取消:对在跑的手机直出发中止旗标(碎片间隙退出);无连接/未在跑时空转无害
@@ -644,8 +742,8 @@ static const NSUInteger kTcpBatchCap = 8000000;
     [self logf:logf fmt:@"[*] key 预检通过 track=%luB prefetch=%luB",
          (unsigned long)trackUse.length, (unsigned long)pfUse.length];
 
-    // ---- 3.6) 直传建链(手机直出不需要:组装走引擎 RPC;失败不拦路,回退引擎通道) ----
-    if (!phoneMerge) dual = [self buildDual:link logf:logf];
+    // ---- 3.6) 直传建链(本机合并走批量传输;手机直出用于成品回传;失败不拦路,各自兜底) ----
+    dual = [self buildDual:link logf:logf];
 
     // ---- 4) key 方案(播放列表 ↔ 磁盘元数据自洽,防错资产) ----
     NSString *prefetchPart = @"p000000000/s1/e1";
@@ -682,7 +780,7 @@ static const NSUInteger kTcpBatchCap = 8000000;
     NSString *constIv = [[NSData dataWithBytes:prots[0].constIv length:ivLen]
         base64EncodedStringWithOptions:0];
 
-    // ---- 6) 成品组装:本机合并(逐碎片)或手机官方直出(mpbuild) ----
+    // ---- 6) 成品组装:本机合并(逐碎片)或手机官方直出(分片 RPC) ----
     NSMutableData *cleanedInit = [OBMP4 cleanInit:fileBuf initEnd:initEnd dedupe:NO];
     NSMutableData *result = nil;
     uint32_t fragIdx = 0, totalBlocks = 0;
@@ -721,11 +819,11 @@ static const NSUInteger kTcpBatchCap = 8000000;
         }
         [self logf:logf fmt:@"[*] 整曲已推送(%lu 字节),手机端组装中…", (unsigned long)fileLen];
         NSString *pbErr = nil;
-        NSDictionary *pb = [self phoneBuild:link path:pushRemote out:phoneOut
-                                  initPath:initRemote initLen:initEnd
-                                    constIv:constIv ivSize:prots[0].perSampleIvSize
-                                    segKeys:segKeys trackKey:trackUse pfKey:pfUse
-                                       logf:logf error:&pbErr];
+        NSDictionary *pb = [self phoneAssemble:link path:pushRemote out:phoneOut
+                                      initPath:initRemote initLen:initEnd
+                                        constIv:constIv ivSize:prots[0].perSampleIvSize
+                                        segKeys:segKeys trackKey:trackUse pfKey:pfUse
+                                           logf:logf cancel:cancelFlag error:&pbErr];
         [self phoneCleanup:@[initRemote, pushRemote]];
         if (!pb) {
             [self phoneCleanup:@[phoneOut]];
@@ -733,10 +831,19 @@ static const NSUInteger kTcpBatchCap = 8000000;
             if (err) *err = pbErr;
             return nil;
         }
+        uint64_t outSize = [pb[@"size"] unsignedLongLongValue];
         NSString *gerr = nil;
-        BOOL pulled = [OBADB pull:phoneOut to:outPath error:&gerr];
+        BOOL got = NO;
+        if (dual) {
+            [self logf:logf fmt:@"[*] 成品经双链回传(%llu 字节)…", outSize];
+            got = [dual fetchFile:phoneOut toPath:outPath totalSize:outSize logf:logf error:&gerr];
+        }
+        if (!got) {   // 双链不可用/失败 → adb pull 兜底
+            if (dual) [self logf:logf fmt:@"[!] 双链回传失败(%@),改走 adb pull", gerr ?: @"?"];
+            got = [OBADB pull:phoneOut to:outPath error:&gerr];
+        }
         [self phoneCleanup:@[phoneOut]];
-        if (!pulled) {
+        if (!got) {
             [self endLink:link dual:dual];
             if (err) *err = [NSString stringWithFormat:@"成品拉回失败: %@", gerr ?: @"?"];
             return nil;
@@ -946,8 +1053,8 @@ static const NSUInteger kTcpBatchCap = 8000000;
     }
     [self logf:logf fmt:@"[*] key 就绪 track=%luB prefetch=%luB", (unsigned long)trackUse.length, (unsigned long)pfUse.length];
 
-    // ---- 2.5) 直传建链(手机直出不需要:组装走引擎 RPC;失败不拦路,回退引擎通道) ----
-    if (!phoneMerge) dual = [self buildDual:link logf:logf];
+    // ---- 2.5) 直传建链(本机合并走批量传输;手机直出用于成品回传;失败不拦路,各自兜底) ----
+    dual = [self buildDual:link logf:logf];
 
     // ---- 3) 清单与资产(手机直出:资产留在手机原位,只取清单文本) ----
     NSString *assetPhone = [NSString stringWithFormat:@"%@/%@/%@", c2, adam, assetFn];
@@ -1008,7 +1115,7 @@ static const NSUInteger kTcpBatchCap = 8000000;
     }
     [self logf:logf fmt:@"[*] %@ | keyUri=%@ 段数=%lu", name, [OBPlaylist normKeyUri:trackUri], (unsigned long)segments.count];
 
-    // ---- 5) 成品组装:本机合并(与网络路线同构)或手机官方直出(mpbuild) ----
+    // ---- 5) 成品组装:本机合并(与网络路线同构)或手机官方直出(分片 RPC) ----
     uint32_t initEnd = initRange.location + initRange.length;
     NSMutableData *result = nil;
     uint32_t fragIdx = 0, totalBlocks = 0;
@@ -1066,11 +1173,11 @@ static const NSUInteger kTcpBatchCap = 8000000;
         NSString *phoneOut = [NSString stringWithFormat:@"/data/data/%@/cache/obout_%@.m4a", OB_PHONE_PKG, adam];
         [self logf:logf fmt:@"[*] 手机端组装中(资产留在手机原位,不中转)…"];
         NSString *pbErr = nil;
-        NSDictionary *pb = [self phoneBuild:link path:assetPhone out:phoneOut
-                                  initPath:icRemote initLen:initEnd
-                                    constIv:constIv ivSize:prots[0].perSampleIvSize
-                                    segKeys:segKeys trackKey:trackUse pfKey:pfUse
-                                       logf:logf error:&pbErr];
+        NSDictionary *pb = [self phoneAssemble:link path:assetPhone out:phoneOut
+                                      initPath:icRemote initLen:initEnd
+                                        constIv:constIv ivSize:prots[0].perSampleIvSize
+                                        segKeys:segKeys trackKey:trackUse pfKey:pfUse
+                                           logf:logf cancel:cancelFlag error:&pbErr];
         [self phoneCleanup:@[icRemote]];
         if (!pb) {
             [self phoneCleanup:@[phoneOut]];
@@ -1078,10 +1185,19 @@ static const NSUInteger kTcpBatchCap = 8000000;
             if (err) *err = pbErr;
             return nil;
         }
+        uint64_t outSize = [pb[@"size"] unsignedLongLongValue];
         NSString *gerr = nil;
-        BOOL pulled = [OBADB pull:phoneOut to:outPath error:&gerr];
+        BOOL got = NO;
+        if (dual) {
+            [self logf:logf fmt:@"[*] 成品经双链回传(%llu 字节)…", outSize];
+            got = [dual fetchFile:phoneOut toPath:outPath totalSize:outSize logf:logf error:&gerr];
+        }
+        if (!got) {   // 双链不可用/失败 → adb pull 兜底
+            if (dual) [self logf:logf fmt:@"[!] 双链回传失败(%@),改走 adb pull", gerr ?: @"?"];
+            got = [OBADB pull:phoneOut to:outPath error:&gerr];
+        }
         [self phoneCleanup:@[phoneOut]];
-        if (!pulled) {
+        if (!got) {
             [self endLink:link dual:dual];
             if (err) *err = [NSString stringWithFormat:@"成品拉回失败: %@", gerr ?: @"?"];
             return nil;
