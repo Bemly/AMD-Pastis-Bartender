@@ -793,6 +793,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
             [self hint:@"两种方式都在工具栏:「开始下载」走网络(自动深链预取→下载→解密→验证);"
                         "「缓存直解」只吃手机已缓存的曲目,零网络,要求 key 未过期。"],
             [self hint:@"完成后自动校验包数/解码/时长并写入标签与封面;详细进度看「日志」页。"],
+            [self hint:@"无线链路要求手机关闭 VPN 分流才能建链（开着自动只走有线，不影响下载）。"],
         ]];
         [self stretchChildren:v];
         [self addCard:[self glassCard:@"执行" body:v] toPage:page];
