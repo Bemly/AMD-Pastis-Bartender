@@ -51,7 +51,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     NSInteger _section;
     // 连接页
     NSTextField *_adbPathF, *_adbHostF, *_adbPortF, *_serialF;
-    NSTextField *_tcpPortF, *_lanIpF, *_scriptDirF, *_outDirF;
+    NSTextField *_tcpPortF, *_lanIpF, *_outDirF;
     NSButton *_useTcpC;
     NSTextField *_statusL;
     // 设备页
@@ -650,13 +650,8 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         [self addCard:[self glassCard:@"传输通道" body:v] toPage:page];
     }
     {
-        // 卡 3:脚本与输出 + 状态
+        // 卡 3:输出 + 状态（原生引擎零外部脚本依赖，旧脚本目录配置已删除）
         NSStackView *v = [self formStack];
-        _scriptDirF = [self field:@"download_tcp.py 与 .venv 所在目录" width:0];
-        [v addViews:@[
-            [self formRow:@"脚本目录" items:@[_scriptDirF, [self button:@"浏览…" action:@selector(browseScript:)]]],
-            [self hint:@"Python 解释器按「脚本目录/.venv/bin/python」自动探测。"],
-        ]];
         _outDirF = [self field:@"下载成品保存位置" width:0];
         [v addViews:@[
             [self formRow:@"输出目录" items:@[_outDirF, [self button:@"浏览…" action:@selector(browseOut:)]]],
@@ -669,7 +664,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
                        [self button:@"恢复默认" action:@selector(restoreDefaults:)]]];
         [v addViews:@[st]];
         [self stretchChildren:v];
-        [self addCard:[self glassCard:@"脚本与输出" body:v] toPage:page];
+        [self addCard:[self glassCard:@"输出" body:v] toPage:page];
     }
     return [self scrollWrap:page];
 }
@@ -986,7 +981,6 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     _serialF.stringValue = c.serial ?: @"";
     _tcpPortF.stringValue = c.tcpPort ?: @"17001";
     _lanIpF.stringValue = c.lanIp ?: @"";
-    _scriptDirF.stringValue = c.scriptDir ?: @"";
     _outDirF.stringValue = c.outDir ?: @"";
     _useTcpC.state = c.useTcp ? NSControlStateValueOn : NSControlStateValueOff;
     // 下载页懒建时控件可能未出生(nil 消息空转),建页处会再刷一次
@@ -1021,7 +1015,6 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     c.tcpPort = [_tcpPortF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     if (c.tcpPort.length == 0) c.tcpPort = @"17001";
     c.lanIp = [_lanIpF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    c.scriptDir = [_scriptDirF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     c.outDir = [_outDirF.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     c.useTcp = (_useTcpC.state == NSControlStateValueOn);
     // 下载页没建出来(_mergeP 为 nil)就不碰已存值(同歌词页口径)
@@ -1168,7 +1161,6 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 }
 
 - (void)browseAdb:(id)sender { AMDDBG(@"action: browseAdb"); [self pickExecutableInto:_adbPathF]; }
-- (void)browseScript:(id)sender { AMDDBG(@"action: browseScript"); [self pickDirectoryInto:_scriptDirF]; }
 - (void)browseOut:(id)sender { AMDDBG(@"action: browseOut"); [self pickDirectoryInto:_outDirF]; }
 - (void)openOutDir:(id)sender {
     AMDDBG(@"action: openOutDir");

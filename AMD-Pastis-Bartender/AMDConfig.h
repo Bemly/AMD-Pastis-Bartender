@@ -9,7 +9,6 @@
 @property (copy) NSString *serial;     // 设备序列号,空=自动探测
 @property (copy) NSString *tcpPort;    // 起始端口对,默认17001
 @property (copy) NSString *lanIp;      // 手机局域网IP,空=自动探测
-@property (copy) NSString *scriptDir;  // download_tcp.py 所在目录
 @property (copy) NSString *outDir;     // 下载输出目录
 @property (assign) BOOL useTcp;        // 默认YES
 // 成品组装方式:mac=本机合并(默认,逐碎片解密回拼) phone=手机官方解码器直出
@@ -31,7 +30,5 @@
 /// 带 -H/-P 的 adb 基础参数(含 -s,如有 serial)
 - (NSArray<NSString *> *)adbBaseArgs;
 - (NSString *)resolvedSerial:(NSString *)fallback;
-- (NSString *)pythonPath;   // scriptDir/.venv/bin/python,不存在则回退 python3
-- (NSString *)downloadScriptPath;
 
 @end

@@ -20,7 +20,6 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     self.serial = @"";
     self.tcpPort = @"17001";
     self.lanIp = @"";
-    self.scriptDir = @"/Users/bemly/Projects/amd";
     self.outDir = @"/Users/bemly/Projects/amd/downloads";
     self.useTcp = YES;
     self.mergeMode = @"mac";
@@ -44,7 +43,6 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
         self.serial = [d stringForKey:[kPfx stringByAppendingString:@"serial"]] ?: @"";
         self.tcpPort = [d stringForKey:[kPfx stringByAppendingString:@"tcpPort"]] ?: @"17001";
         self.lanIp = [d stringForKey:[kPfx stringByAppendingString:@"lanIp"]] ?: @"";
-        self.scriptDir = [d stringForKey:[kPfx stringByAppendingString:@"scriptDir"]] ?: self.scriptDir;
         self.outDir = [d stringForKey:[kPfx stringByAppendingString:@"outDir"]] ?: self.outDir;
         self.useTcp = [d boolForKey:[kPfx stringByAppendingString:@"useTcp"]];
         self.mergeMode = [d stringForKey:[kPfx stringByAppendingString:@"mergeMode"]] ?: @"mac";
@@ -99,7 +97,6 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
     [d setObject:self.serial forKey:[kPfx stringByAppendingString:@"serial"]];
     [d setObject:self.tcpPort forKey:[kPfx stringByAppendingString:@"tcpPort"]];
     [d setObject:self.lanIp forKey:[kPfx stringByAppendingString:@"lanIp"]];
-    [d setObject:self.scriptDir forKey:[kPfx stringByAppendingString:@"scriptDir"]];
     [d setObject:self.outDir forKey:[kPfx stringByAppendingString:@"outDir"]];
     [d setBool:self.useTcp forKey:[kPfx stringByAppendingString:@"useTcp"]];
     [d setObject:self.mergeMode forKey:[kPfx stringByAppendingString:@"mergeMode"]];
@@ -125,16 +122,6 @@ static NSString *const kPfx = @"AMD-Pastis-Bartender.";
 - (NSString *)resolvedSerial:(NSString *)fallback {
     if (self.serial.length > 0) return self.serial;
     return fallback ?: @"";
-}
-
-- (NSString *)pythonPath {
-    NSString *p = [self.scriptDir stringByAppendingPathComponent:@".venv/bin/python"];
-    if ([[NSFileManager defaultManager] isExecutableFileAtPath:p]) return p;
-    return @"python3";
-}
-
-- (NSString *)downloadScriptPath {
-    return [self.scriptDir stringByAppendingPathComponent:@"download_tcp.py"];
 }
 
 @end
