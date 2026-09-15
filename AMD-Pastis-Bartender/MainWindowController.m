@@ -15,7 +15,7 @@ static NSArray<NSString *> *AllCountries(void) {
     return @[@"hk", @"tw", @"jp", @"us", @"cn"];
 }
 
-static NSString * const AMDAppVersion = @"v2026.09.13";
+static NSString * const AMDAppVersion = @"v2026.09.16";
 
 #pragma mark - 侧栏条目
 
