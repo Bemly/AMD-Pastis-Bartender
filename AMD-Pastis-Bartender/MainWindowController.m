@@ -71,6 +71,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
     volatile BOOL _dlCancel;
     volatile BOOL _followCancel;
     BOOL _followOn;
+    BOOL _dlBusy;   // 原生下载/跟随进行中(主线程读写);防重入闸门,见 downloadEntryFree
     // 预览页(输出目录 .m4a 列表;同名 .json 有则读 artist/title)
     NSTableView *_pvTable;
     NSMutableArray<NSDictionary *> *_pvItems;
@@ -1731,6 +1732,19 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 
 #pragma mark - download
 
+// 下载入口防重入闸门:下载框回车不走工具栏,禁用态拦不住它;并发下载会互相拆单例
+// OBLink 的会话、互踩同名手机端临时路径,还触发过引擎 ABBA 死锁(2026-09-18 实录)。
+// 返回 YES=放行。下载页可能未建(_dlStatusL 为 nil),面板提示走日志镜像。
+- (BOOL)downloadEntryFree {
+    if (_dlBusy || _followOn) {
+        AMDDBG(@"action: rejected by entry gate (dl=%d follow=%d)", _dlBusy, _followOn);
+        [self appendLog:@"[任务] 已有下载/跟随在跑,等它结束或取消后再开\n"];
+        if (_dlStatusL) _dlStatusL.stringValue = @"状态: 已有任务在跑";
+        return NO;
+    }
+    return YES;
+}
+
 - (void)startDownloadNative:(NSString *)adamIds cache:(BOOL)cacheMode {
     // 原生引擎:多目标逐个跑;取消标志为 ivar(地址稳定,引擎在碎片间轮询)
     NSArray *toks = [adamIds componentsSeparatedByCharactersInSet:
@@ -1742,6 +1756,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         [self applyDownloadBusy:NO];
         return;
     }
+    _dlBusy = YES;
     AMDConfig *c = [AMDConfig shared];
     NSString *outDir = c.outDir.length ? c.outDir : [NSTemporaryDirectory() stringByAppendingPathComponent:@"amd-dl"];
     [[NSFileManager defaultManager] createDirectoryAtPath:outDir withIntermediateDirectories:YES attributes:nil error:NULL];
@@ -1761,12 +1776,16 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
             if (!meta && ![err containsString:@"已存在"])
                 [self appendLog:[NSString stringWithFormat:@"[!] adam %@ 失败: %@\n", adam, err ?: @"?"]];
         }
-        dispatch_async(dispatch_get_main_queue(), ^{ [self applyDownloadBusy:NO]; });
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_dlBusy = NO;
+            [self applyDownloadBusy:NO];
+        });
     });
 }
 
 - (void)startDownload:(id)sender {
     AMDDBG(@"action: startDownload(native)");
+    if (![self downloadEntryFree]) return;
     [self readUIToConfig];
     [self applyDownloadBusy:YES];
     [self startDownloadNative:_adamF.stringValue cache:NO];
@@ -1774,6 +1793,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
 
 - (void)startDownloadCache:(id)sender {
     AMDDBG(@"action: startDownloadCache(native)");
+    if (![self downloadEntryFree]) return;
     [self readUIToConfig];
     [self applyDownloadBusy:YES];
     [self startDownloadNative:_adamF.stringValue cache:YES];
@@ -1787,6 +1807,7 @@ static NSDictionary *SideItem(NSString *title, NSString *symbol) {
         [self appendLog:@"[跟随] 停止中(当前间隙退出)…\n"];
         return;
     }
+    if (![self downloadEntryFree]) return;
     [self readUIToConfig];
     AMDConfig *c = [AMDConfig shared];
     NSString *outDir = c.outDir.length ? c.outDir : [NSTemporaryDirectory() stringByAppendingPathComponent:@"amd-dl"];

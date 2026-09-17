@@ -39,5 +39,8 @@ BOOL ob_detach(void *session, NSString * _Nullable * _Nullable outErr);
 void ob_close_manager(void);
 // 引擎对象的引用计数 -1(g_object_unref 转发;调用方不接触 glib 类型)
 void ob_release(void *gobject);
+// 引擎对象的引用计数 +1(g_object_ref 转发):跨 kit 调用窗口使用对象前先自留一份,
+// 防止 disconnect/detach 回调在此期间把对象 unref 掉(锁外化之后的配套保险)
+void ob_retain(void *gobject);
 
 NS_ASSUME_NONNULL_END

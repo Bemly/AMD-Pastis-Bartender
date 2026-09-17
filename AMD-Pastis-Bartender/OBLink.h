@@ -5,6 +5,9 @@ NS_ASSUME_NONNULL_BEGIN
 // 注入引擎会话层:连接(设备→进程→attach)→ 装脚本 → RPC(按 id 配对请求/应答)。
 // 纪律(docs/03):按需短连接,用完 disconnect,空闲零注入。
 // 线程:方法线程安全;RPC 内部用信号量等待;回调在 kit 线程→后台队列。
+// ★ 锁纪律(2026-09-18 实录,违其一即 ABBA 死锁):
+//   1) 任何线程不得持内部锁等待 kit 同步调用(连接/装脚本全程锁外,只留状态读改临界区);
+//   2) kit 线程回调(detached/message)绝不阻塞等锁,tryLock 拿不到投后台重试。
 
 @interface OBLink : NSObject
 

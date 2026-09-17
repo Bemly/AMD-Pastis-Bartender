@@ -53,14 +53,15 @@ static NSString * const kRemoteAddr = @"127.0.0.1:27042";
 - (unsigned)pid { return self.targetPid; }
 
 - (BOOL)connectToProcess:(NSString *)procName error:(NSString **)err {
-    OBUnlocker *u = [[OBUnlocker alloc] initWithLock:self.lock];
-    (void)u;
     AMDDBG(@"kit: connect begin (proc=%@)", procName);
     ob_bootstrap();
     [self disconnect];
 
     // 设备:USB 先试(macOS 侧对 Android 通常不可用,见冒烟实录),失败退远程——
-    // 远程走 adb forward,调用方在连接前保证 forward 存在(自检/下载入口都先跑一条)
+    // 远程走 adb forward,调用方在连接前保证 forward 存在(自检/下载入口都先跑一条)。
+    // ★ 全程不持 self.lock:以下全是 kit 同步调用,期间 detached/message 回调会进 kit
+    // 线程拿这把锁;持锁等 kit 完成 = ABBA 死锁(2026-09-18 实录:本方法持锁跑 ob_detach,
+    // kit 线程进 detached 回调等锁,双方互等,其余下载 worker 全部停在等锁)。
     NSString *derr = nil;
     void *dev = ob_device_usb(2, &derr);
     if (dev) {
@@ -70,53 +71,72 @@ static NSString * const kRemoteAddr = @"127.0.0.1:27042";
         dev = ob_device_remote(kRemoteAddr, &derr);
     }
     if (!dev) { if (err) *err = derr ?: @"无设备"; return NO; }
-    self.dev = dev;
     AMDDBG(@"kit: device=%@", ob_device_name(dev));
 
     unsigned pid = ob_pid_by_name(dev, procName, &derr);
     if (!pid) {
         if (err) *err = [NSString stringWithFormat:@"找不到进程 %@: %@", procName, derr ?: @"?"];
-        [self disconnect];
         return NO;
     }
-    self.targetPid = pid;
 
     void *session = ob_attach(dev, pid, &derr);
     if (!session) {
         if (err) *err = derr ?: @"attach 失败";
-        [self disconnect];
         return NO;
     }
-    self.session = session;
+    // detached 回调先登记(对象此刻只有本线程持有),再进短临界区登记会话
     __weak typeof(self) w = self;
+    void *capturedSession = session;
     ob_on_detached(session, ^(int reason) {
         AMDDBG(@"kit: detached reason=%d", reason);
-        [w hardReset];
+        [w hardResetSession:capturedSession];
     });
+
+    [self.lock lock];
+    void *staleScript = self.script, *staleSession = self.session;
+    self.session = session;
+    self.script = NULL;
+    self.dev = dev;
+    self.targetPid = pid;
+    [self.lock unlock];
+    // 并发兜底:登记前已有他人脚本/会话在册则锁外释放(disconnect 正常路径已清空,这里通常为空)
+    if (staleScript) { ob_script_unload(staleScript, NULL); ob_release(staleScript); }
+    if (staleSession && staleSession != session) ob_release(staleSession);
     AMDDBG(@"kit: attached pid=%u", pid);
     return YES;
 }
 
 - (BOOL)loadScriptSource:(NSString *)source error:(NSString * _Nullable * _Nullable)err {
-    OBUnlocker *u = [[OBUnlocker alloc] initWithLock:self.lock];
-    (void)u;
-    if (!self.session) { if (err) *err = @"未连接"; return NO; }
-    if (self.script) {           // 替换:先卸旧的
-        ob_script_unload(self.script, NULL);
-        ob_release(self.script);
-        self.script = NULL;
-    }
+    [self.lock lock];
+    void *session = self.session;
+    ob_retain(session);   // 锁外窗口自留引用:期间 disconnect/detach 回调放引用也不会放掉对象
+    [self.lock unlock];
+    if (!session) { if (err) *err = @"未连接"; return NO; }
+
+    // 替换:先卸旧的。kit 同步调用一律锁外(同 connectToProcess 的 ABBA 实录)
+    [self.lock lock];
+    void *old = self.script;
+    self.script = NULL;
+    [self.lock unlock];
+    if (old) { ob_script_unload(old, NULL); ob_release(old); }
+
     NSString *serr = nil;
-    void *script = ob_script_new(self.session, source, &serr);
-    if (!script) { if (err) *err = serr ?: @"建脚本失败"; return NO; }
+    void *script = ob_script_new(session, source, &serr);
+    if (!script) { ob_release(session); if (err) *err = serr ?: @"建脚本失败"; return NO; }
     __weak typeof(self) w = self;
     ob_script_on_message(script, ^(NSString *json, NSData *data) { [w handleMessage:json data:data]; });
     if (!ob_script_load(script, &serr)) {
         ob_release(script);
+        ob_release(session);
         if (err) *err = serr ?: @"装脚本失败";
         return NO;
     }
-    self.script = script;
+    [self.lock lock];
+    BOOL adopted = (self.script == NULL);   // 并发兜底:已有后来者装入则弃用本份
+    if (adopted) self.script = script;
+    [self.lock unlock];
+    if (!adopted) { ob_script_unload(script, NULL); ob_release(script); }
+    ob_release(session);
     AMDDBG(@"kit: script loaded");
     return YES;
 }
@@ -129,6 +149,8 @@ static NSString * const kRemoteAddr = @"127.0.0.1:27042";
 
 // 应答帧:{"type":"send","payload":{"id":N,...}};非应答帧转事件流。
 // 加锁序:self.lock 保护 pending/replies;cond 只做唤醒(等端先持 cond 再查表,漏信号靠重查兜底)。
+// 本方法在 kit 线程回调:绝不阻塞等 self.lock——持锁方可能在等本 kit 协程完成(2026-09-18
+// 实录),同步等锁 = ABBA;拿不到就投后台重试,回调先返回让 kit 协程走完。
 - (void)handleMessage:(NSString *)json data:(NSData *)data {
     static NSRegularExpression *re;
     static dispatch_once_t once;
@@ -137,7 +159,12 @@ static NSString * const kRemoteAddr = @"127.0.0.1:27042";
     if (m && m.numberOfRanges >= 2) {
         NSNumber *id = @([json substringWithRange:[m rangeAtIndex:1]].integerValue);
         NSCondition *cond = nil;
-        [self.lock lock];
+        if (![self.lock tryLock]) {
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+                [self handleMessage:json data:data];
+            });
+            return;
+        }
         self.replies[id] = json;
         cond = self.pending[id];
         [self.lock unlock];
@@ -212,10 +239,19 @@ static NSString * const kRemoteAddr = @"127.0.0.1:27042";
     if (session) { ob_detach(session, NULL); ob_release(session); }
 }
 
-// detached 信号路径(可能已在 kit 线程):只清状态 + unref,不做 kit 同步调用(同线程死锁)
-- (void)hardReset {
-    [self.lock lock];
+// detached 信号路径(在 kit 线程):绝不阻塞等 self.lock——2026-09-18 实录,worker 持锁等
+// 本 kit 协程(detach)完成,这里再等锁 = 双方互等,全部下载 worker 停摆。拿不到锁就投后台
+// 重试(回调先返回,kit 协程才能走完)。只清死掉的那个会话:并发下当前会话可能已换人。
+- (void)hardResetSession:(void *)deadSession {
+    if (![self.lock tryLock]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
+                       dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+            [self hardResetSession:deadSession];
+        });
+        return;
+    }
     void *script = self.script, *session = self.session;
+    if (deadSession && session != deadSession) { [self.lock unlock]; return; }
     self.script = NULL; self.session = NULL; self.targetPid = 0;
     [self.lock unlock];
     if (script) ob_release(script);

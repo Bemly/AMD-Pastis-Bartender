@@ -231,3 +231,7 @@ void ob_close_manager(void) {
 void ob_release(void *gobject) {
     if (gobject) g_object_unref(gobject);
 }
+
+void ob_retain(void *gobject) {
+    if (gobject) g_object_ref(gobject);
+}
